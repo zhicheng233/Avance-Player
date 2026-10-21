@@ -1,0 +1,176 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Avance_Player.ViewModels"
+             xmlns:models="using:Avance_Player.Models"
+             xmlns:controls="using:Avance_Player.Controls"
+             x:Class="Avance_Player.Views.ImmersiveLyricsView"
+             x:DataType="vm:MainWindowViewModel"
+             ClipToBounds="True">
+    <UserControl.Styles>
+        <!-- Very slow opacity breathing on the artwork glow. PlaybackBehavior.Auto pauses these
+             style animations while the lyrics view is hidden, so normal mode pays nothing. -->
+        <Style Selector="Ellipse.breathe">
+            <Style.Animations>
+                <Animation Duration="0:0:7" IterationCount="Infinite" PlaybackDirection="Alternate" Easing="SineEaseInOut">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Opacity" Value="0.22" />
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Opacity" Value="0.44" />
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+        <Style Selector="Ellipse.breathe-slow">
+            <Style.Animations>
+                <Animation Duration="0:0:10" IterationCount="Infinite" PlaybackDirection="Alternate" Easing="SineEaseInOut">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Opacity" Value="0.18" />
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Opacity" Value="0.36" />
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+    </UserControl.Styles>
+
+    <Grid>
+        <controls:FluidBackdrop x:Name="Backdrop"
+                                BaseBrush="{Binding Palette.WindowBackground, Converter={StaticResource ArtworkColorConverter}}"
+                                AccentBrush="{Binding Palette.Accent, Converter={StaticResource ArtworkColorConverter}}"
+                                SecondaryBrush="{Binding Palette.AccentSecondary, Converter={StaticResource ArtworkColorConverter}}"
+                                Phase="{Binding AmbientPhase}" />
+        <Border Background="#220F0E0C" />
+
+        <Grid Margin="34,26,34,24" RowDefinitions="Auto,*,Auto" RowSpacing="20">
+            <Grid x:Name="TopBar" Grid.Row="0" ColumnDefinitions="*,Auto">
+                <Button Classes="island-button" Command="{Binding ExitLyricsCommand}">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="←" />
+                        <TextBlock Text="{Binding Text[BackToLibrary]}" />
+                    </StackPanel>
+                </Button>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10">
+                    <Button Classes="language-button" Content="{Binding Text.LanguageName}" ToolTip.Tip="{Binding Text[LanguageToggle]}" Command="{Binding ToggleLanguageCommand}" />
+                    <Button Classes="island-button" Width="34" Height="34" Padding="0" CornerRadius="17"
+                            ToolTip.Tip="{Binding Text[ToggleFullscreen]}" Command="{Binding ToggleFullscreenCommand}">
+                        <controls:MediaGlyph Kind="Fullscreen" Width="14" Height="14" />
+                    </Button>
+                </StackPanel>
+            </Grid>
+
+            <Grid Grid.Row="1" ColumnDefinitions="0.9*,1.1*" ColumnSpacing="40" Margin="12,8" MinHeight="0">
+                <StackPanel x:Name="ArtworkPanel" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="22" MaxWidth="380">
+                    <Border Width="270" Height="270" CornerRadius="26" ClipToBounds="True" BoxShadow="0 34 90 0 #A6000000">
+                        <Grid>
+                            <Border Classes="artwork-fade" Background="{Binding CurrentTrack.ArtworkColor, Converter={StaticResource ArtworkColorConverter}}" />
+                            <Ellipse Classes="breathe" Width="280" Height="280" Fill="{Binding Palette.AccentSecondary, Converter={StaticResource ArtworkColorConverter}}" Opacity="0.38" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-82,-86,0" />
+                            <Ellipse Classes="breathe-slow" Width="240" Height="240" Fill="{Binding Palette.Accent, Converter={StaticResource ArtworkColorConverter}}" Opacity="0.34" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="-58,0,0,-98" />
+                            <Border Width="112" Height="112" CornerRadius="58" Background="#221F1A" BorderBrush="#F5EFE2" BorderThickness="1" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <Border Width="24" Height="24" CornerRadius="13" Background="#F5EFE2" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                        </Grid>
+                    </Border>
+                    <StackPanel Spacing="6" HorizontalAlignment="Center">
+                        <TextBlock Text="{Binding CurrentTrack.Title}" FontSize="26" FontWeight="Bold" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding CurrentTrack.Artist}" FontSize="14" Foreground="#CFC7B8" HorizontalAlignment="Center" />
+                        <TextBlock Text="{Binding CurrentTrack.Album}" FontSize="11" Foreground="#A8A193" HorizontalAlignment="Center" />
+                    </StackPanel>
+                </StackPanel>
+
+                <Grid x:Name="LyricsColumn" Grid.Column="1" RowDefinitions="Auto,*" VerticalAlignment="Stretch" Margin="0,4,0,4" MinHeight="0">
+                    <StackPanel Grid.Row="0" Spacing="5" Margin="0,0,0,18">
+                        <TextBlock Text="{Binding Text[LyricsEyebrow]}" Foreground="#D8C9AE" FontSize="11" FontWeight="Bold" LetterSpacing="1.8" />
+                        <TextBlock Text="{Binding Text[LyricsHeadline]}" FontSize="24" FontWeight="Bold" />
+                    </StackPanel>
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled">
+                        <ScrollViewer.OpacityMask>
+                            <!-- Lines fade out at both ends instead of being sliced by the viewport
+                                 edge, matching the way streaming lyric views hand off between lines. -->
+                            <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                                <GradientStop Offset="0" Color="#00000000" />
+                                <GradientStop Offset="0.07" Color="#FF000000" />
+                                <GradientStop Offset="0.93" Color="#FF000000" />
+                                <GradientStop Offset="1" Color="#00000000" />
+                            </LinearGradientBrush>
+                        </ScrollViewer.OpacityMask>
+                        <ItemsControl x:Name="LyricsList" ItemsSource="{Binding CurrentTrack.Lyrics}">
+                            <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Spacing="6" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="models:LyricLine">
+                                    <Button Classes="lyric-line" Classes.current="{Binding IsCurrent}" HorizontalContentAlignment="Stretch"
+                                            Command="{Binding $parent[UserControl].DataContext.SeekToLyricCommand}" CommandParameter="{Binding}">
+                                        <StackPanel Spacing="4">
+                                            <controls:LyricLineTextBlock Line="{Binding}" TextWrapping="Wrap"
+                                                                         AccentBrush="{Binding $parent[UserControl].DataContext.Palette.Accent, Converter={StaticResource ArtworkColorConverter}}"
+                                                                         FutureBrush="#8F887B" />
+                                            <TextBlock Text="{Binding Translation}" IsVisible="{Binding HasTranslation}" FontSize="15" FontWeight="Medium" Foreground="#C0B8A9" TextWrapping="Wrap" />
+                                            <TextBlock Text="{Binding Romanization}" IsVisible="{Binding HasRomanization}" FontSize="12" Foreground="#948D80" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                    </Button>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                    <TextBlock Grid.Row="1" Text="{Binding Text[NoLyrics]}" Foreground="#B5AD9F" FontSize="17" VerticalAlignment="Center" IsVisible="{Binding NoLyricsAvailable}" />
+                </Grid>
+            </Grid>
+
+            <Border x:Name="TransportBar" Grid.Row="2" Background="#332E2922" BorderBrush="#4A4238" BorderThickness="1" CornerRadius="24" Padding="20,12"
+                    HorizontalAlignment="Center" MinWidth="480" MaxWidth="760" BoxShadow="0 18 50 0 #99000000">
+                <Grid RowDefinitions="Auto,Auto" RowSpacing="8">
+                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="16">
+                        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                            <Button Classes="mini-transport" ToolTip.Tip="{Binding Text[TooltipPrevious]}" Command="{Binding PreviousTrackCommand}">
+                                <controls:MediaGlyph Kind="Previous" Width="13" Height="13"
+                                                     Foreground="{Binding $parent[Button].Foreground}" />
+                            </Button>
+                            <Button Classes="mini-play large" Background="#EFE7D8" ToolTip.Tip="{Binding Text[TooltipPlayPause]}" Command="{Binding TogglePlaybackCommand}">
+                                <controls:TransportGlyph Width="16" Height="16" IsPlaying="{Binding IsPlaying}" Fill="#1B1915" />
+                            </Button>
+                            <Button Classes="mini-transport" ToolTip.Tip="{Binding Text[TooltipNext]}" Command="{Binding NextTrackCommand}">
+                                <controls:MediaGlyph Kind="Next" Width="13" Height="13"
+                                                     Foreground="{Binding $parent[Button].Foreground}" />
+                            </Button>
+                        </StackPanel>
+                        <TextBlock Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Center" FontSize="10" Foreground="#B3AB9D">
+                            <Run Text="{Binding CurrentTimeLabel}" /><Run Text=" / " /><Run Text="{Binding DurationLabel}" />
+                        </TextBlock>
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                            <Button Classes="mini-transport" Classes.active="{Binding IsShuffleMode}"
+                                    ToolTip.Tip="{Binding Text[TooltipShuffle]}" Command="{Binding ToggleShuffleCommand}">
+                                <controls:MediaGlyph Kind="Shuffle" IsActive="{Binding IsShuffleMode}" Width="13" Height="13"
+                                                     Foreground="{Binding $parent[Button].Foreground}" />
+                            </Button>
+                            <Button Classes="mini-transport" Classes.active="{Binding IsRepeatActive}"
+                                    ToolTip.Tip="{Binding Text[TooltipRepeat]}" Command="{Binding CycleRepeatModeCommand}">
+                                <Grid>
+                                    <controls:MediaGlyph Kind="Repeat" IsVisible="{Binding !IsRepeatOne}" Width="13" Height="13"
+                                                         Foreground="{Binding $parent[Button].Foreground}" />
+                                    <controls:MediaGlyph Kind="RepeatOne" IsVisible="{Binding IsRepeatOne}" Width="13" Height="13"
+                                                         Foreground="{Binding $parent[Button].Foreground}" />
+                                </Grid>
+                            </Button>
+                            <TextBlock Text="{Binding LocalQualityLabel}" FontSize="10" Foreground="#B3AB9D"
+                                       VerticalAlignment="Center" ToolTip.Tip="{Binding Text[QualityLabel]}" />
+                            <Button Classes="mini-transport" ToolTip.Tip="{Binding Text[TooltipVolume]}" Command="{Binding ToggleMuteCommand}">
+                                <controls:VolumeGlyph Width="14" Height="13" Level="{Binding Volume}" IsMuted="{Binding IsMuted}"
+                                                      Foreground="{Binding $parent[Button].Foreground}" />
+                            </Button>
+                            <controls:WaveProgressBar Width="90" Height="18" VerticalAlignment="Center" ShowThumb="True" IsWavy="False"
+                                                      Value="{Binding Volume, Mode=TwoWay}" Maximum="1" WaveHeight="0"
+                                                      AccentBrush="#CBD3BB" />
+                        </StackPanel>
+                    </Grid>
+                    <controls:WaveProgressBar Grid.Row="1" Height="24"
+                                              Value="{Binding CurrentPositionSeconds, Mode=TwoWay}"
+                                              Maximum="{Binding CurrentDurationSeconds}"
+                                              Phase="{Binding AmbientPhase}" IsPlaying="{Binding IsPlaying}"
+                                              LoopStart="{Binding AbLoopStartFraction}" LoopEnd="{Binding AbLoopEndFraction}"
+                                              AccentBrush="{Binding Palette.Accent, Converter={StaticResource ArtworkColorConverter}}" />
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

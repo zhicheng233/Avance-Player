@@ -53,5 +53,3 @@ public sealed class PlaylistDetailPageViewModel(Playlist playlist, ObservableCol
     private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 }
-
-public sealed class PlayerPageViewModel() : PageViewModel("Now playing", "A moment, made yours.");

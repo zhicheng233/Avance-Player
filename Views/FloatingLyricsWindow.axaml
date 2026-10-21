@@ -1,0 +1,100 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Avance_Player.ViewModels"
+        xmlns:models="using:Avance_Player.Models"
+        xmlns:controls="using:Avance_Player.Controls"
+        x:Class="Avance_Player.Views.FloatingLyricsWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Width="430" Height="168"
+        MinWidth="320" MinHeight="132"
+        CanResize="False"
+        ShowInTaskbar="False"
+        Topmost="True"
+        WindowDecorations="None"
+        TransparencyLevelHint="Transparent"
+        Background="Transparent"
+        WindowStartupLocation="Manual"
+        Title="{Binding Text[FloatingLyricsLabel]}">
+    <Window.Styles>
+        <Style Selector="Button.float-action">
+            <Setter Property="Width" Value="26" />
+            <Setter Property="Height" Value="26" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="CornerRadius" Value="13" />
+            <Setter Property="Background" Value="#33FFFFFF" />
+            <Setter Property="Foreground" Value="#F4EEE2" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+        <Style Selector="Button.float-action:pointerover">
+            <Setter Property="Background" Value="#55FFFFFF" />
+        </Style>
+        <Style Selector="Border.artwork-fade">
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.55" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+    </Window.Styles>
+
+    <Border x:Name="RootCard" Background="#E622201C" BorderBrush="#4F473B" BorderThickness="1" CornerRadius="22" Padding="18,14"
+            BoxShadow="0 14 42 0 #99000000" Cursor="SizeAll">
+        <Grid RowDefinitions="Auto,Auto,Auto">
+            <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                <Border Classes="artwork-fade" Width="30" Height="30" CornerRadius="9" Background="{Binding CurrentTrack.ArtworkColor, Converter={StaticResource ArtworkColorConverter}}">
+                    <TextBlock Text="♪" FontSize="15" Foreground="#FBF7EF" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+                <StackPanel Grid.Column="1" Spacing="1" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding CurrentTrack.Title}" FontSize="11" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" Foreground="#F2ECDF" />
+                    <TextBlock Text="{Binding CurrentTrack.Artist}" FontSize="9" Foreground="#A9A194" TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6">
+                    <Button Classes="float-action" Command="{Binding PreviousTrackCommand}" ToolTip.Tip="{Binding Text[TooltipPrevious]}">
+                        <controls:MediaGlyph Kind="Previous" Width="10" Height="10" />
+                    </Button>
+                    <Button Classes="float-action" Command="{Binding TogglePlaybackCommand}" ToolTip.Tip="{Binding Text[TooltipPlayPause]}">
+                        <controls:TransportGlyph Width="10" Height="10" IsPlaying="{Binding IsPlaying}" Fill="#F4EEE2" />
+                    </Button>
+                    <Button Classes="float-action" Command="{Binding NextTrackCommand}" ToolTip.Tip="{Binding Text[TooltipNext]}">
+                        <controls:MediaGlyph Kind="Next" Width="10" Height="10" />
+                    </Button>
+                    <Button Classes="float-action" ToolTip.Tip="{Binding Text[TooltipClose]}" Command="{Binding ToggleFloatingLyricsCommand}">
+                        <controls:MediaGlyph Kind="Close" Width="10" Height="10" />
+                    </Button>
+                </StackPanel>
+            </Grid>
+
+            <TransitioningContentControl Grid.Row="1" Content="{Binding CurrentLyric}" Margin="4,12,4,8">
+                <TransitioningContentControl.PageTransition>
+                    <controls:FadeSlidePageTransition Duration="0:0:0.26" Offset="8" ScaleFrom="1" ScaleTo="1" />
+                </TransitioningContentControl.PageTransition>
+                <TransitioningContentControl.ContentTemplate>
+                    <DataTemplate x:DataType="models:LyricLine">
+                        <StackPanel Spacing="2">
+                            <controls:LyricLineTextBlock Line="{Binding}" FontSize="18" FontWeight="Bold" TextWrapping="Wrap"
+                                                         TextAlignment="Center" Foreground="#FBF6EA"
+                                                         AccentBrush="{Binding $parent[Window].DataContext.Palette.Accent, Converter={StaticResource ArtworkColorConverter}}"
+                                                         FutureBrush="#B9B0A0" />
+                            <TextBlock Text="{Binding Translation}" IsVisible="{Binding HasTranslation}" FontSize="12"
+                                       Foreground="#C4BBAA" TextAlignment="Center" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </DataTemplate>
+                </TransitioningContentControl.ContentTemplate>
+            </TransitioningContentControl>
+
+            <Grid Grid.Row="2" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                <TextBlock Text="{Binding CurrentTimeLabel}" FontSize="9" Foreground="#938B7E" VerticalAlignment="Center" />
+                <controls:WaveProgressBar Grid.Column="1" Height="18"
+                                          Value="{Binding CurrentPositionSeconds, Mode=TwoWay}"
+                                          Maximum="{Binding CurrentDurationSeconds}"
+                                          Phase="{Binding AmbientPhase}" IsPlaying="{Binding IsPlaying}"
+                                          LoopStart="{Binding AbLoopStartFraction}" LoopEnd="{Binding AbLoopEndFraction}"
+                                          AccentBrush="#CBD3BB" />
+                <TextBlock Grid.Column="2" Text="{Binding DurationLabel}" FontSize="9" Foreground="#938B7E" VerticalAlignment="Center" />
+            </Grid>
+        </Grid>
+    </Border>
+</Window>
