@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using Avance_Player.Models;
 using Avance_Player.Services;
@@ -30,6 +31,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     private readonly Stack<Music> _shuffleHistory = new();
     private readonly HashSet<Music> _shufflePlayed = [];
     private readonly LyricsService _lyricsService = new();
+    private readonly LocalFolderScanner _folderScanner = new();
     private double _currentPositionSeconds;
     private bool _isPlaying;
     private string _newPlaylistName = string.Empty;
@@ -474,6 +476,76 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             OnPropertyChanged(nameof(AbLoopEndFraction));
             _ = TryLoadSidecarForCurrentTrackAsync(value);
         }
+    }
+
+    /// <summary>
+    /// Scans a folder tree in the background and appends its audio files to a playlist. The scan
+    /// also attaches same-folder cover art and lyric sidecars, including one-song folders whose
+    /// lyric file does not share the audio file's name.
+    /// </summary>
+    public async Task ImportFolderToPlaylistAsync(
+        Playlist playlist,
+        string folderPath,
+        CancellationToken cancellationToken = default) {
+        var folderName = GetFolderDisplayName(folderPath);
+        SetStatus("StatusScanningFolder", folderName);
+
+        try {
+            var labels = new LocalFolderScanLabels(
+                Text["UnknownArtist"],
+                Text["UnknownAlbum"],
+                Text["UnknownGenre"]);
+            var result = await Task.Run(
+                () => _folderScanner.ScanAsync(folderPath, labels, cancellationToken),
+                cancellationToken);
+
+            var comparer = OperatingSystem.IsWindows()
+                ? StringComparer.OrdinalIgnoreCase
+                : StringComparer.Ordinal;
+            var existingPaths = new HashSet<string>(
+                playlist.Tracks.Select(track => track.FilePath).Where(path => !string.IsNullOrWhiteSpace(path)),
+                comparer);
+
+            var added = 0;
+            var skipped = result.SkippedFileCount;
+            foreach (var track in result.Tracks) {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!existingPaths.Add(track.FilePath)) {
+                    skipped++;
+                    continue;
+                }
+
+                playlist.Tracks.Add(track);
+                added++;
+            }
+
+            if (CurrentPage is PlaylistDetailPageViewModel detail && ReferenceEquals(detail.Playlist, playlist)) {
+                detail.NotifyTracksChanged();
+            }
+
+            if (added > 0 && ReferenceEquals(SelectedPlaylist, playlist)) {
+                PlaybackQueue = playlist.Tracks;
+            }
+
+            if (added == 0) {
+                SetStatus("StatusFolderEmpty", folderName);
+            }
+            else {
+                SetStatus("StatusFolderImported", added, folderName, skipped);
+            }
+        }
+        catch (OperationCanceledException) {
+            SetStatus("StatusFolderCancelled");
+        }
+        catch (Exception exception) {
+            SetStatus("StatusFolderError", exception.Message);
+        }
+    }
+
+    private static string GetFolderDisplayName(string folderPath) {
+        var trimmed = folderPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var name = Path.GetFileName(trimmed);
+        return string.IsNullOrWhiteSpace(name) ? folderPath : name;
     }
 
     public async Task LoadLyricsFromFileAsync(string path) {

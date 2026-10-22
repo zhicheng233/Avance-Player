@@ -65,6 +65,7 @@
                     <Border Width="270" Height="270" CornerRadius="26" ClipToBounds="True" BoxShadow="0 34 90 0 #A6000000">
                         <Grid>
                             <Border Classes="artwork-fade" Background="{Binding CurrentTrack.ArtworkColor, Converter={StaticResource ArtworkColorConverter}}" />
+                            <Image Source="{Binding CurrentTrack.Artwork}" Stretch="UniformToFill" />
                             <Ellipse Classes="breathe" Width="280" Height="280" Fill="{Binding Palette.AccentSecondary, Converter={StaticResource ArtworkColorConverter}}" Opacity="0.38" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-82,-86,0" />
                             <Ellipse Classes="breathe-slow" Width="240" Height="240" Fill="{Binding Palette.Accent, Converter={StaticResource ArtworkColorConverter}}" Opacity="0.34" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="-58,0,0,-98" />
                             <Border Width="112" Height="112" CornerRadius="58" Background="#221F1A" BorderBrush="#F5EFE2" BorderThickness="1" HorizontalAlignment="Center" VerticalAlignment="Center">

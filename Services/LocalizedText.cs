@@ -81,6 +81,12 @@ public sealed class LocalizedText : INotifyPropertyChanged {
         ["NoLyrics"] = "No synced lyrics for this track yet.",
         ["ImportLyrics"] = "Import lyrics",
         ["ImportLyricsFilter"] = "Lyrics files",
+        ["AddLocalFolder"] = "＋  Add local folder",
+        ["TooltipAddLocalFolder"] = "Scan a folder and add its songs",
+        ["FolderPickerTitle"] = "Choose a music folder",
+        ["UnknownArtist"] = "Unknown artist",
+        ["UnknownAlbum"] = "Unknown album",
+        ["UnknownGenre"] = "Local files",
         ["LyricsWordLevel"] = "word by word",
         ["LyricsLineLevel"] = "line by line",
         ["BackToLibrary"] = "Back to library",
@@ -156,7 +162,12 @@ public sealed class LocalizedText : INotifyPropertyChanged {
         ["StatusSleepCancelled"] = "Sleep timer cancelled.",
         ["StatusSleepFinished"] = "Sleep timer finished — playback stopped.",
         ["StatusLyricsLoaded"] = "Lyrics loaded: {0} ({1}).",
-        ["StatusLyricsError"] = "Could not load lyrics: {0}"
+        ["StatusLyricsError"] = "Could not load lyrics: {0}",
+        ["StatusScanningFolder"] = "Scanning “{0}”…",
+        ["StatusFolderImported"] = "Imported {0} songs from “{1}” ({2} skipped).",
+        ["StatusFolderEmpty"] = "No new songs found in “{0}”.",
+        ["StatusFolderError"] = "Could not scan folder: {0}",
+        ["StatusFolderCancelled"] = "Folder scan cancelled."
     };
 
     private static readonly IReadOnlyDictionary<string, string> Chinese = new Dictionary<string, string>(StringComparer.Ordinal) {
@@ -233,6 +244,12 @@ public sealed class LocalizedText : INotifyPropertyChanged {
         ["NoLyrics"] = "这首歌暂时没有同步歌词。",
         ["ImportLyrics"] = "导入歌词",
         ["ImportLyricsFilter"] = "歌词文件",
+        ["AddLocalFolder"] = "＋  添加本地文件夹",
+        ["TooltipAddLocalFolder"] = "扫描文件夹并添加其中的歌曲",
+        ["FolderPickerTitle"] = "选择音乐文件夹",
+        ["UnknownArtist"] = "未知艺术家",
+        ["UnknownAlbum"] = "未知专辑",
+        ["UnknownGenre"] = "本地文件",
         ["LyricsWordLevel"] = "逐词",
         ["LyricsLineLevel"] = "逐行",
         ["BackToLibrary"] = "返回音乐库",
@@ -308,7 +325,12 @@ public sealed class LocalizedText : INotifyPropertyChanged {
         ["StatusSleepCancelled"] = "已取消定时关闭。",
         ["StatusSleepFinished"] = "定时关闭时间到，播放已停止。",
         ["StatusLyricsLoaded"] = "已加载歌词：{0}（{1}）。",
-        ["StatusLyricsError"] = "歌词加载失败：{0}"
+        ["StatusLyricsError"] = "歌词加载失败：{0}",
+        ["StatusScanningFolder"] = "正在扫描「{0}」…",
+        ["StatusFolderImported"] = "已从「{1}」导入 {0} 首歌曲（跳过 {2} 首）。",
+        ["StatusFolderEmpty"] = "「{0}」中没有找到新歌曲。",
+        ["StatusFolderError"] = "文件夹扫描失败：{0}",
+        ["StatusFolderCancelled"] = "已取消文件夹扫描。"
     };
 
     private string _cultureName;

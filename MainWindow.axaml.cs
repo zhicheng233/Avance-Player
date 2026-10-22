@@ -210,6 +210,20 @@ public partial class MainWindow : Window {
         await _viewModel.LoadLyricsFromFileAsync(path);
     }
 
+    private async void ImportFolder_Click(object? sender, RoutedEventArgs e) {
+        if (_viewModel?.SelectedPlaylist is not { } playlist) return;
+
+        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions {
+            Title = _viewModel.Text["FolderPickerTitle"],
+            AllowMultiple = false
+        });
+
+        if (folders.Count == 0) return;
+        var path = folders[0].TryGetLocalPath();
+        if (string.IsNullOrWhiteSpace(path)) return;
+        await _viewModel.ImportFolderToPlaylistAsync(playlist, path);
+    }
+
     private void ScrollActiveLyric() {
         if (_viewModel is null || !_viewModel.IsLyricsMode || _viewModel.CurrentLyricIndex < 0) return;
         var lyricsList = this.GetVisualDescendants()

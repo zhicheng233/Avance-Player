@@ -15,5 +15,6 @@
             <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
             <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
         </PackageReference>
+        <PackageReference Include="TagLibSharp" Version="2.3.0" />
     </ItemGroup>
 </Project>

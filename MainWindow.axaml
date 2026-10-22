@@ -28,6 +28,7 @@
                                     Width="35" Height="35" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-12,-9,0" />
                             <TextBlock Text="♪" FontSize="20" FontWeight="Bold" Foreground="White"
                                        HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            <Image Source="{Binding Artwork}" Stretch="UniformToFill" />
                         </Grid>
                     </Border>
                     <StackPanel Grid.Column="2" VerticalAlignment="Center" Spacing="3">
@@ -58,8 +59,12 @@
             <Border Classes="song-row" Padding="10,8" CornerRadius="12"
                     Tapped="SongRow_Tapped" DoubleTapped="SongRow_DoubleTapped">
                 <Grid Classes="song-row-content" ColumnDefinitions="48,*,Auto,Auto" ColumnSpacing="14">
-                    <Border Grid.Column="0" Width="46" Height="46" CornerRadius="9" Background="{Binding ArtworkColor, Converter={StaticResource ArtworkColorConverter}}">
-                        <TextBlock Text="♪" FontSize="20" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    <Border Grid.Column="0" Width="46" Height="46" CornerRadius="9" ClipToBounds="True">
+                        <Grid>
+                            <Border Background="{Binding ArtworkColor, Converter={StaticResource ArtworkColorConverter}}" />
+                            <TextBlock Text="♪" FontSize="20" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            <Image Source="{Binding Artwork}" Stretch="UniformToFill" />
+                        </Grid>
                     </Border>
                     <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="3">
                         <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
@@ -245,8 +250,13 @@
                             <TextBlock Text="{Binding Playlist.Tracks.Count}" Foreground="#A8A193" FontSize="13" />
                             <TextBlock Text="{Binding $parent[Window].DataContext.Text[PlaylistCountSuffix]}" Foreground="#A8A193" FontSize="13" />
                         </StackPanel>
-                            <Button Classes="danger-button" Content="{Binding $parent[Window].DataContext.Text[DeletePlaylist]}" HorizontalAlignment="Left"
-                                    Command="{Binding $parent[Window].DataContext.DeletePlaylistCommand}" />
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button Classes="island-button" Content="{Binding $parent[Window].DataContext.Text[AddLocalFolder]}"
+                                        ToolTip.Tip="{Binding $parent[Window].DataContext.Text[TooltipAddLocalFolder]}"
+                                        Click="ImportFolder_Click" />
+                                <Button Classes="danger-button" Content="{Binding $parent[Window].DataContext.Text[DeletePlaylist]}"
+                                        Command="{Binding $parent[Window].DataContext.DeletePlaylistCommand}" />
+                            </StackPanel>
                         </StackPanel>
                     </Grid>
 
@@ -919,8 +929,12 @@
                                 <TransitioningContentControl.ContentTemplate>
                                     <DataTemplate x:DataType="models:Music">
                                         <StackPanel Orientation="Horizontal" Spacing="10">
-                                            <Border Classes="artwork-fade" Width="40" Height="40" CornerRadius="11" Background="{Binding ArtworkColor, Converter={StaticResource ArtworkColorConverter}}">
-                                                <TextBlock Text="♪" FontSize="19" Foreground="#FBF7EF" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                            <Border Classes="artwork-fade" Width="40" Height="40" CornerRadius="11" ClipToBounds="True"
+                                                    Background="{Binding ArtworkColor, Converter={StaticResource ArtworkColorConverter}}">
+                                                <Grid>
+                                                    <TextBlock Text="♪" FontSize="19" Foreground="#FBF7EF" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                    <Image Source="{Binding Artwork}" Stretch="UniformToFill" />
+                                                </Grid>
                                             </Border>
                                             <StackPanel Spacing="2" VerticalAlignment="Center" MinWidth="150" MaxWidth="240">
                                                 <TextBlock Text="{Binding Title}" FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using Avalonia.Media.Imaging;
 
 namespace Avance_Player.Models;
 
@@ -17,6 +18,15 @@ public sealed class Music : INotifyPropertyChanged {
     public required TimeSpan Duration { get; init; }
     public string DurationLabel => Duration.ToString(@"m\:ss");
     public string FilePath { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Cover loaded from a sidecar image or the audio file's embedded picture. Demo tracks leave
+    /// this null and fall back to <see cref="ArtworkColor"/>.
+    /// </summary>
+    public Bitmap? Artwork { get; init; }
+
+    /// <summary>Source path of the sidecar cover, when one was found.</summary>
+    public string? ArtworkPath { get; init; }
 
     /// <summary>Bitrate of the local file in kbps, used to derive the quality tier label.</summary>
     public int BitrateKbps { get; init; } = 1411;

@@ -44,8 +44,12 @@
             BoxShadow="0 14 42 0 #99000000" Cursor="SizeAll">
         <Grid RowDefinitions="Auto,Auto,Auto">
             <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
-                <Border Classes="artwork-fade" Width="30" Height="30" CornerRadius="9" Background="{Binding CurrentTrack.ArtworkColor, Converter={StaticResource ArtworkColorConverter}}">
-                    <TextBlock Text="♪" FontSize="15" Foreground="#FBF7EF" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                <Border Classes="artwork-fade" Width="30" Height="30" CornerRadius="9" ClipToBounds="True"
+                        Background="{Binding CurrentTrack.ArtworkColor, Converter={StaticResource ArtworkColorConverter}}">
+                    <Grid>
+                        <TextBlock Text="♪" FontSize="15" Foreground="#FBF7EF" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        <Image Source="{Binding CurrentTrack.Artwork}" Stretch="UniformToFill" />
+                    </Grid>
                 </Border>
                 <StackPanel Grid.Column="1" Spacing="1" VerticalAlignment="Center">
                     <TextBlock Text="{Binding CurrentTrack.Title}" FontSize="11" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" Foreground="#F2ECDF" />

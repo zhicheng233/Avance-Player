@@ -50,20 +50,31 @@ public sealed class LyricsService {
         CancellationToken cancellationToken = default) {
         if (string.IsNullOrWhiteSpace(audioPath)) return null;
 
-        string basePath;
+        string? directory;
+        string? baseName;
         try {
-            basePath = Path.ChangeExtension(audioPath, null);
+            directory = Path.GetDirectoryName(audioPath);
+            baseName = Path.GetFileNameWithoutExtension(audioPath);
         }
         catch (ArgumentException) {
             return null;
         }
 
-        if (string.IsNullOrWhiteSpace(basePath)) return null;
+        if (string.IsNullOrWhiteSpace(directory) || string.IsNullOrWhiteSpace(baseName)) return null;
+
+        // Match sidecars case-insensitively: a folder copied from Windows may contain "Song.LRC"
+        // while the audio file is "Song.flac", and Linux would otherwise miss it.
+        var files = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        try {
+            foreach (var file in Directory.EnumerateFiles(directory)) files.TryAdd(Path.GetFileName(file), file);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or NotSupportedException) {
+            return null;
+        }
 
         string? lastError = null;
         foreach (var extension in SidecarPriority) {
-            var candidate = basePath + extension;
-            if (!File.Exists(candidate)) continue;
+            if (!files.TryGetValue(baseName + extension, out var candidate)) continue;
 
             try {
                 return await LoadAsync(candidate, trackDuration, cancellationToken).ConfigureAwait(false);
