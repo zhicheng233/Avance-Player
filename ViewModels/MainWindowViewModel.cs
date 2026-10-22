@@ -11,6 +11,8 @@ using System.Threading.Tasks;
 using Avance_Player.Models;
 using Avance_Player.Services;
 using Avance_Player.Services.Lyrics;
+using Avance_Player.Services.Persistence;
+using Avance_Player.Services.Playback;
 using Avalonia.Threading;
 
 namespace Avance_Player.ViewModels;
@@ -30,10 +32,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     private readonly Random _random = new();
     private readonly Stack<Music> _shuffleHistory = new();
     private readonly HashSet<Music> _shufflePlayed = [];
-    private readonly LyricsService _lyricsService = new();
-    private readonly LocalFolderScanner _folderScanner = new();
+    private readonly PlayerServices _services;
+    private readonly PlaybackService _playback;
+    private readonly DebouncedStateSaver _stateSaver;
+    private readonly LyricsService _lyricsService;
+    private readonly LocalFolderScanner _folderScanner;
     private double _currentPositionSeconds;
     private bool _isPlaying;
+    private bool _isRestoringState;
+    private bool _suppressSeek;
+    private bool _isInitialized;
+    private bool _disposed;
+    private DateTime _lastStateSaveUtc = DateTime.MinValue;
     private string _newPlaylistName = string.Empty;
     private string _statusKey = "StatusIdle";
     private object[] _statusArguments = [];
@@ -64,10 +74,22 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     private bool _isCompactLayout;
     private string _expandedMoreSection = string.Empty;
 
-    public MainWindowViewModel() {
+    public MainWindowViewModel() : this(PlayerServices.CreateDefault()) {
+    }
+
+    public MainWindowViewModel(PlayerServices services) {
+        _services = services;
+        _playback = services.Playback;
+        _stateSaver = services.StateSaver;
+        _lyricsService = services.Lyrics;
+        _folderScanner = services.Scanner;
+        _playback.Ended += Playback_Ended;
+        _playback.Failed += Playback_Failed;
+        _stateSaver.SaveFailed += StateSaver_SaveFailed;
+
         Tracks = CreateDemoTracks();
-        // Demo-only: the prototype has no audio backend, so two tracks get evenly distributed
-        // word timings to exercise the word-by-word renderer before a real lyric file is imported.
+        // Demo-only: built-in tracks use the simulated clock, so two get evenly distributed word
+        // timings to exercise the word-by-word renderer before a real lyric file is imported.
         if (Tracks.Count > 0) Tracks[0].Lyrics = AddDemoWordTimings(Tracks[0].Lyrics, Tracks[0].Duration);
         var underSameSky = Tracks.FirstOrDefault(track => track.Title == "Under the Same Sky");
         if (underSameSky is not null) underSameSky.Lyrics = AddDemoWordTimings(underSameSky.Lyrics, underSameSky.Duration);
@@ -110,9 +132,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         RemoveTrackFromPlaylistCommand = new RelayCommand(parameter => {
             if (parameter is Music track && SelectedPlaylist is not null && SelectedPlaylist.Tracks.Remove(track)) {
                 (CurrentPage as PlaylistDetailPageViewModel)?.NotifyTracksChanged();
+                QueueStateSave();
             }
         });
-        TogglePlaybackCommand = new RelayCommand(_ => IsPlaying = !IsPlaying);
+        TogglePlaybackCommand = new RelayCommand(_ => TogglePlayback());
         StopCommand = new RelayCommand(_ => Stop());
         NextTrackCommand = new RelayCommand(_ => MoveTrack(1));
         PreviousTrackCommand = new RelayCommand(_ => MoveTrack(-1));
@@ -147,7 +170,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             IsLyricsMode = true;
         });
         ExitLyricsCommand = new RelayCommand(_ => ExitLyricsMode());
-        ToggleLanguageCommand = new RelayCommand(_ => Text.ToggleLanguage());
+        ToggleLanguageCommand = new RelayCommand(_ => {
+            Text.ToggleLanguage();
+            QueueStateSave();
+        });
         ToggleFullscreenCommand = new RelayCommand(_ => IsSystemFullscreen = !IsSystemFullscreen);
         SeekToLyricCommand = new RelayCommand(parameter => {
             if (parameter is LyricLine line) CurrentPositionSeconds = line.Timestamp.TotalSeconds;
@@ -163,6 +189,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         _ambientTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
         _ambientTimer.Tick += AmbientTimer_Tick;
         _ambientTimer.Start();
+        _playback.SetVolume(_volume);
+        _playback.SetRate(PlaybackSpeed);
         UpdateCurrentLyric();
     }
 
@@ -244,6 +272,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             OnPropertyChanged();
             OnPropertyChanged(nameof(PlaybackOrderLabel));
             ResetShuffleState();
+            QueueStateSave();
         }
     }
 
@@ -257,6 +286,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             OnPropertyChanged(nameof(IsRepeatOne));
             OnPropertyChanged(nameof(IsRepeatAll));
             OnPropertyChanged(nameof(IsRepeatActive));
+            QueueStateSave();
         }
     }
 
@@ -271,6 +301,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             _isFloatingLyricsVisible = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(FloatingLyricsStateLabel));
+            QueueStateSave();
         }
     }
 
@@ -346,9 +377,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             if (Math.Abs(_volume - nextValue) < 0.005) return;
             _volume = nextValue;
             if (nextValue > 0.005) _lastNonZeroVolume = nextValue;
+            _playback.SetVolume(nextValue);
             OnPropertyChanged();
             OnPropertyChanged(nameof(VolumePercentage));
             OnPropertyChanged(nameof(IsMuted));
+            QueueStateSave();
         }
     }
 
@@ -366,6 +399,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             OnPropertyChanged(nameof(EqualizerMenuValue));
             SelectOption(EqualizerOptions, nextValue);
             UpdateEqualizerBands();
+            QueueStateSave();
         }
     }
 
@@ -379,6 +413,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             OnPropertyChanged(nameof(PlaybackSpeedLabel));
             OnPropertyChanged(nameof(SpeedMenuValue));
             SelectOption(PlaybackSpeedOptions, nextValue);
+            _playback.SetRate(PlaybackSpeed);
+            QueueStateSave();
         }
     }
 
@@ -505,11 +541,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             var existingPaths = new HashSet<string>(
                 playlist.Tracks.Select(track => track.FilePath).Where(path => !string.IsNullOrWhiteSpace(path)),
                 comparer);
+            var libraryPaths = new HashSet<string>(
+                Tracks.Select(track => track.FilePath).Where(path => !string.IsNullOrWhiteSpace(path)),
+                comparer);
 
             var added = 0;
             var skipped = result.SkippedFileCount;
             foreach (var track in result.Tracks) {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (!string.IsNullOrWhiteSpace(track.FilePath) && libraryPaths.Add(track.FilePath)) {
+                    Tracks.Add(track);
+                }
+
                 if (!existingPaths.Add(track.FilePath)) {
                     skipped++;
                     continue;
@@ -526,6 +569,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             if (added > 0 && ReferenceEquals(SelectedPlaylist, playlist)) {
                 PlaybackQueue = playlist.Tracks;
             }
+            OnPropertyChanged(nameof(QueueCountLabel));
 
             if (added == 0) {
                 SetStatus("StatusFolderEmpty", folderName);
@@ -533,6 +577,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             else {
                 SetStatus("StatusFolderImported", added, folderName, skipped);
             }
+
+            QueueStateSave();
         }
         catch (OperationCanceledException) {
             SetStatus("StatusFolderCancelled");
@@ -619,7 +665,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             if (_isPlaying == value) return;
             _isPlaying = value;
             OnPropertyChanged();
-            SetStatus(value ? "StatusPlaying" : "StatusPaused", value ? [CurrentTrack.Title] : []);
         }
     }
 
@@ -636,14 +681,28 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
 
     public double CurrentPositionSeconds {
         get => _currentPositionSeconds;
-        set {
-            var nextValue = Math.Clamp(value, 0, CurrentDurationSeconds);
-            if (Math.Abs(_currentPositionSeconds - nextValue) < 0.05) return;
-            _currentPositionSeconds = nextValue;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(CurrentTimeLabel));
-            UpdateCurrentLyric();
-            if (_currentPositionSeconds >= CurrentDurationSeconds) AdvanceAfterTrackEnd();
+        set => SetPosition(value, seek: true);
+    }
+
+    private void SetPosition(double seconds, bool seek) {
+        var nextValue = Math.Clamp(seconds, 0, CurrentDurationSeconds);
+        if (Math.Abs(_currentPositionSeconds - nextValue) < 0.001) return;
+        _currentPositionSeconds = nextValue;
+        OnPropertyChanged();
+        OnPropertyChanged(nameof(CurrentTimeLabel));
+        UpdateCurrentLyric();
+        if (seek && !_suppressSeek && _playback.IsLoaded) {
+            _playback.Seek(TimeSpan.FromSeconds(nextValue));
+        }
+    }
+
+    private void ApplyPlaybackPosition(TimeSpan position) {
+        _suppressSeek = true;
+        try {
+            SetPosition(position.TotalSeconds, seek: false);
+        }
+        finally {
+            _suppressSeek = false;
         }
     }
 
@@ -754,13 +813,72 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     private void PlayTrack(Music track, ObservableCollection<Music>? queue = null) {
         if (queue is not null) PlaybackQueue = queue;
         CurrentTrack = track;
-        CurrentPositionSeconds = 0;
         AbLoopReset();
-        IsPlaying = true;
-        SetStatus("StatusPlaying", track.Title);
+        ApplyPlaybackPosition(TimeSpan.Zero);
+        if (!StartTrack(track, TimeSpan.Zero, autoplay: true)) return;
+
         RecentTracks.Remove(track);
         RecentTracks.Insert(0, track);
         while (RecentTracks.Count > 12) RecentTracks.RemoveAt(RecentTracks.Count - 1);
+    }
+
+    private bool StartTrack(Music track, TimeSpan startAt, bool autoplay) {
+        if (track.IsLocalFile && !track.HasPlayableFile) {
+            _playback.Stop();
+            IsPlaying = false;
+            ApplyPlaybackPosition(TimeSpan.Zero);
+            SetStatus("StatusFileMissing", track.FilePath);
+            QueueStateSave();
+            return false;
+        }
+
+        var result = _playback.Start(ToAudioSource(track), startAt, autoplay);
+        if (!result.Success) {
+            IsPlaying = false;
+            SetStatus(track.IsLocalFile ? "StatusPlaybackUnavailable" : "StatusPlaybackFailed",
+                result.Error ?? string.Empty);
+            QueueStateSave();
+            return false;
+        }
+
+        ApplyPlaybackPosition(startAt);
+        IsPlaying = autoplay;
+        if (autoplay) {
+            SetStatus(track.IsLocalFile ? "StatusPlaying" : "StatusPlayingDemo", track.Title);
+        }
+        QueueStateSave();
+        return true;
+    }
+
+    private static AudioSource ToAudioSource(Music track) =>
+        new(track.FilePath, track.Duration, track.IsLocalFile);
+
+    private void TogglePlayback() {
+        if (_playback.IsLoaded) {
+            if (IsPlaying) {
+                _playback.Pause();
+                IsPlaying = false;
+                SetStatus("StatusPaused");
+            }
+            else {
+                if (CurrentTrack.IsLocalFile && !CurrentTrack.HasPlayableFile) {
+                    SetStatus("StatusFileMissing", CurrentTrack.FilePath);
+                    return;
+                }
+
+                _playback.Play();
+                IsPlaying = true;
+                SetStatus(CurrentTrack.IsLocalFile ? "StatusPlaying" : "StatusPlayingDemo", CurrentTrack.Title);
+            }
+
+            QueueStateSave();
+            return;
+        }
+
+        var startAt = _currentPositionSeconds >= CurrentDurationSeconds - 0.5
+            ? TimeSpan.Zero
+            : TimeSpan.FromSeconds(_currentPositionSeconds);
+        StartTrack(CurrentTrack, startAt, autoplay: true);
     }
 
     private void MoveTrack(int direction) {
@@ -773,9 +891,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         if (direction < 0 && IsShuffleMode && _shuffleHistory.Count > 0) {
             var previous = _shuffleHistory.Pop();
             CurrentTrack = previous;
-            CurrentPositionSeconds = 0;
             AbLoopReset();
-            IsPlaying = true;
+            ApplyPlaybackPosition(TimeSpan.Zero);
+            StartTrack(previous, TimeSpan.Zero, autoplay: true);
             return;
         }
 
@@ -788,12 +906,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     private void AdvanceAfterTrackEnd() {
         switch (RepeatMode) {
             case RepeatMode.Track:
-                CurrentPositionSeconds = 0;
+                RestartCurrentTrack();
                 return;
             case RepeatMode.Off when IsLastSequentialTrack():
+                _playback.Stop();
                 IsPlaying = false;
-                CurrentPositionSeconds = CurrentDurationSeconds;
+                ApplyPlaybackPosition(TimeSpan.FromSeconds(CurrentDurationSeconds));
                 SetStatus("StatusQueueEnded");
+                QueueStateSave();
                 return;
             default:
                 MoveTrack(1);
@@ -806,8 +926,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     private void PlayNextShuffle() {
         if (PlaybackQueue.Count <= 1) {
             if (RepeatMode == RepeatMode.Off) {
+                _playback.Stop();
                 IsPlaying = false;
                 SetStatus("StatusQueueEnded");
+                QueueStateSave();
+            }
+            else {
+                RestartCurrentTrack();
             }
             return;
         }
@@ -816,21 +941,41 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         if (unplayed.Count == 0) {
             // With shuffle and no repeat, stop once every track has been heard.
             if (RepeatMode == RepeatMode.Off) {
+                _playback.Stop();
                 IsPlaying = false;
                 SetStatus("StatusQueueEnded");
+                QueueStateSave();
                 return;
             }
             _shufflePlayed.Clear();
             unplayed = PlaybackQueue.Where(track => !ReferenceEquals(track, CurrentTrack)).ToList();
         }
 
+        if (unplayed.Count == 0) {
+            RestartCurrentTrack();
+            return;
+        }
+
         var next = unplayed[_random.Next(unplayed.Count)];
         _shufflePlayed.Add(CurrentTrack);
         _shuffleHistory.Push(CurrentTrack);
         CurrentTrack = next;
-        CurrentPositionSeconds = 0;
         AbLoopReset();
-        IsPlaying = true;
+        ApplyPlaybackPosition(TimeSpan.Zero);
+        StartTrack(next, TimeSpan.Zero, autoplay: true);
+    }
+
+    private void RestartCurrentTrack() {
+        ApplyPlaybackPosition(TimeSpan.Zero);
+        if (_playback.IsLoaded) {
+            _playback.Seek(TimeSpan.Zero);
+            _playback.Play();
+            IsPlaying = true;
+            QueueStateSave();
+            return;
+        }
+
+        StartTrack(CurrentTrack, TimeSpan.Zero, autoplay: true);
     }
 
     private void ResetShuffleState() {
@@ -953,9 +1098,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     }
 
     private void Stop() {
+        _playback.Stop();
         IsPlaying = false;
-        CurrentPositionSeconds = 0;
+        ApplyPlaybackPosition(TimeSpan.Zero);
         SetStatus("StatusStopped");
+        QueueStateSave();
     }
 
     private void AddTrackToPlaylist(Music track) {
@@ -968,6 +1115,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         if (!targetPlaylist.Tracks.Contains(track)) targetPlaylist.Tracks.Add(track);
         if (CurrentPage is PlaylistDetailPageViewModel detail && detail.Playlist == targetPlaylist) detail.NotifyTracksChanged();
         SetStatus("StatusAdded", track.Title, targetPlaylist.Name);
+        QueueStateSave();
     }
 
     private void CreatePlaylist() {
@@ -978,6 +1126,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         NewPlaylistName = string.Empty;
         OpenPlaylist(playlist);
         SetStatus("StatusCreated", playlist.Name);
+        QueueStateSave();
     }
 
     private void DeleteSelectedPlaylist() {
@@ -987,6 +1136,206 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         SelectedPlaylist = null;
         Navigate("playlists");
         SetStatus("StatusDeleted", deletedName);
+        QueueStateSave();
+    }
+
+    public async Task InitializeAsync(CancellationToken cancellationToken = default) {
+        if (_isInitialized || _disposed) return;
+        _isInitialized = true;
+
+        PlayerState? state;
+        try {
+            state = _services.StateStore.Load();
+        }
+        catch (Exception exception) {
+            SetStatus("StatusStateLoadError", exception.Message);
+            return;
+        }
+
+        if (state is null) {
+            var error = _services.StateStore.LastError;
+            if (!string.IsNullOrWhiteSpace(error)) SetStatus("StatusStateLoadError", error);
+            return;
+        }
+
+        _isRestoringState = true;
+        try {
+            ApplySettings(state);
+            SetStatus("StatusRestoringLibrary");
+            var labels = new LocalFolderScanLabels(
+                Text["UnknownArtist"],
+                Text["UnknownAlbum"],
+                Text["UnknownGenre"]);
+            var knownTracks = Tracks.ToList();
+            var restored = await Task.Run(
+                () => _services.LibraryRestorer.RestoreAsync(state, knownTracks, labels, cancellationToken),
+                cancellationToken);
+            if (_disposed) return;
+            ApplyRestoredState(state, restored);
+        }
+        catch (OperationCanceledException) {
+            SetStatus("StatusIdle");
+        }
+        catch (Exception exception) {
+            SetStatus("StatusStateLoadError", exception.Message);
+        }
+        finally {
+            _isRestoringState = false;
+        }
+    }
+
+    private void ApplySettings(PlayerState state) {
+        Text.SetCulture(state.Ui.Language);
+        _lastNonZeroVolume = Math.Clamp(state.Playback.LastNonZeroVolume, 0, 1);
+        if (_lastNonZeroVolume <= 0.005) _lastNonZeroVolume = 0.72;
+        Volume = Math.Clamp(state.Playback.Volume, 0, 1);
+        IsShuffleMode = state.Playback.Shuffle;
+        RepeatMode = ParseRepeatMode(state.Playback.RepeatMode);
+        PlaybackSpeedIndex = state.Playback.SpeedIndex;
+        EqualizerPresetIndex = state.Playback.EqualizerPresetIndex;
+        IsFloatingLyricsVisible = state.Ui.FloatingLyricsVisible;
+    }
+
+    private void ApplyRestoredState(PlayerState state, RestoredLibrary restored) {
+        var comparer = OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+
+        var libraryPaths = new HashSet<string>(
+            Tracks.Select(track => track.FilePath).Where(path => !string.IsNullOrWhiteSpace(path)),
+            comparer);
+        foreach (var track in restored.Tracks) {
+            if (!string.IsNullOrWhiteSpace(track.FilePath) && libraryPaths.Add(track.FilePath)) {
+                Tracks.Add(track);
+            }
+        }
+        OnPropertyChanged(nameof(QueueCountLabel));
+
+        SelectedPlaylist = null;
+        Playlists.Clear();
+        foreach (var playlistState in state.Library.Playlists ?? []) {
+            if (playlistState is null) continue;
+            var name = string.IsNullOrWhiteSpace(playlistState.Name)
+                ? Text.Format("DefaultPlaylistName", Playlists.Count + 1)
+                : playlistState.Name;
+            var playlist = new Playlist(name);
+            var seen = new HashSet<string>(comparer);
+            foreach (var path in playlistState.TrackPaths ?? []) {
+                if (string.IsNullOrWhiteSpace(path) || !seen.Add(path)) continue;
+                if (restored.ByPath.TryGetValue(path, out var track) && !playlist.Tracks.Contains(track)) {
+                    playlist.Tracks.Add(track);
+                }
+            }
+            Playlists.Add(playlist);
+        }
+
+        PlaybackQueue = Tracks;
+
+        if (!string.IsNullOrWhiteSpace(state.Playback.LastTrackPath)
+            && restored.ByPath.TryGetValue(state.Playback.LastTrackPath, out var lastTrack)) {
+            CurrentTrack = lastTrack;
+            var position = Math.Clamp(state.Playback.LastPositionSeconds, 0, lastTrack.Duration.TotalSeconds);
+            ApplyPlaybackPosition(TimeSpan.FromSeconds(position));
+        }
+
+        ResetShuffleState();
+        SetStatus(restored.MissingPaths.Count > 0 ? "StatusRestoreMissing" : "StatusIdle",
+            restored.MissingPaths.Count);
+    }
+
+    private static RepeatMode ParseRepeatMode(string? value) {
+        return Enum.TryParse<RepeatMode>(value, ignoreCase: true, out var mode)
+               && Enum.IsDefined(typeof(RepeatMode), mode)
+            ? mode
+            : RepeatMode.Off;
+    }
+
+    private PlayerState BuildState() {
+        var comparer = OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+
+        var trackPaths = Tracks
+            .Select(track => track.FilePath)
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Distinct(comparer)
+            .ToList();
+        var playlists = Playlists
+            .Select(playlist => new PlaylistState {
+                Name = playlist.Name,
+                TrackPaths = playlist.Tracks
+                    .Select(track => track.FilePath)
+                    .Where(path => !string.IsNullOrWhiteSpace(path))
+                    .Distinct(comparer)
+                    .ToList()
+            })
+            .ToList();
+
+        return new PlayerState {
+            Version = PlayerState.CurrentVersion,
+            Playback = new PlaybackSettings {
+                Volume = _volume,
+                LastNonZeroVolume = _lastNonZeroVolume,
+                Shuffle = _isShuffleMode,
+                RepeatMode = _repeatMode.ToString(),
+                SpeedIndex = _playbackSpeedIndex,
+                EqualizerPresetIndex = _equalizerPresetIndex,
+                LastTrackPath = string.IsNullOrWhiteSpace(CurrentTrack.FilePath) ? null : CurrentTrack.FilePath,
+                LastPositionSeconds = _currentPositionSeconds
+            },
+            Library = new LibrarySettings {
+                TrackPaths = trackPaths,
+                Playlists = playlists
+            },
+            Ui = new UiSettings {
+                Language = Text.CultureName,
+                FloatingLyricsVisible = _isFloatingLyricsVisible
+            }
+        };
+    }
+
+    private void QueueStateSave() {
+        if (_isRestoringState || _disposed) return;
+        _stateSaver.Schedule(BuildState());
+    }
+
+    public void SaveStateNow() {
+        if (_isRestoringState || _disposed) return;
+        _stateSaver.Flush(BuildState());
+    }
+
+    private void Playback_Ended(PlaybackEnded ended) {
+        if (_disposed) return;
+        Dispatcher.UIThread.Post(() => {
+            if (_disposed || _playback.CurrentSession is not { } current || current.Id != ended.Session.Id) return;
+
+            if (IsAbLoopActive && _abLoopStartSeconds is { } start) {
+                // Reload the source at A rather than seeking an ended MediaPlayer; some formats
+                // ignore a seek while stopped, which would restart the track at zero.
+                StartTrack(CurrentTrack, TimeSpan.FromSeconds(start), autoplay: true);
+                return;
+            }
+
+            AdvanceAfterTrackEnd();
+        });
+    }
+
+    private void Playback_Failed(PlaybackFailure failure) {
+        if (_disposed) return;
+        Dispatcher.UIThread.Post(() => {
+            if (_disposed) return;
+            _playback.Stop();
+            IsPlaying = false;
+            SetStatus("StatusPlaybackFailed", failure.Message);
+            QueueStateSave();
+        });
+    }
+
+    private void StateSaver_SaveFailed(string error) {
+        if (_disposed) return;
+        Dispatcher.UIThread.Post(() => {
+            if (!_disposed) SetStatus("StatusStateSaveError", error);
+        });
     }
 
     private void SetStatus(string key, params object[] arguments) {
@@ -1001,14 +1350,24 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     }
 
     private void PlaybackTimer_Tick(object? sender, EventArgs e) {
-        if (IsPlaying) {
-            var nextPosition = CurrentPositionSeconds + 0.1 * PlaybackSpeed;
-            if (IsAbLoopActive && nextPosition >= (_abLoopEndSeconds ?? CurrentDurationSeconds) - 0.02) {
-                // Wrap only the simulated playback clock; manual seeks stay free.
-                CurrentPositionSeconds = _abLoopStartSeconds ?? 0;
+        if (_playback.IsLoaded) {
+            var snapshot = _playback.Snapshot;
+            if (snapshot.IsPlaying != IsPlaying) IsPlaying = snapshot.IsPlaying;
+            ApplyPlaybackPosition(snapshot.Position);
+
+            if (snapshot.IsPlaying
+                && IsAbLoopActive
+                && _abLoopStartSeconds is { } start
+                && _abLoopEndSeconds is { } end
+                && snapshot.Position.TotalSeconds >= end - 0.02) {
+                // A–B wraps through the backend so the real audio clock and the UI stay aligned.
+                ApplyPlaybackPosition(TimeSpan.FromSeconds(start));
+                _playback.Seek(TimeSpan.FromSeconds(start));
             }
-            else {
-                CurrentPositionSeconds = nextPosition;
+
+            if (DateTime.UtcNow - _lastStateSaveUtc >= TimeSpan.FromSeconds(5)) {
+                _lastStateSaveUtc = DateTime.UtcNow;
+                QueueStateSave();
             }
         }
 
@@ -1028,13 +1387,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             _sleepDeadlineUtc = null;
             _sleepTimerSelectionIndex = 0;
             foreach (var option in SleepTimerOptions) option.IsSelected = option.Index == 0;
+            _playback.Stop();
             IsPlaying = false;
-            CurrentPositionSeconds = 0;
+            ApplyPlaybackPosition(TimeSpan.Zero);
             OnPropertyChanged(nameof(SleepTimerSelectionIndex));
             OnPropertyChanged(nameof(SleepTimerRemainingLabel));
             OnPropertyChanged(nameof(SleepTimerMenuValue));
             OnPropertyChanged(nameof(HasSleepTimer));
             SetStatus("StatusSleepFinished");
+            QueueStateSave();
             return;
         }
 
@@ -1155,10 +1516,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 
     public void Dispose() {
+        if (_disposed) return;
+        SaveStateNow();
+        _disposed = true;
+
         _playbackTimer.Stop();
         _playbackTimer.Tick -= PlaybackTimer_Tick;
         _ambientTimer.Stop();
         _ambientTimer.Tick -= AmbientTimer_Tick;
+        _playback.Ended -= Playback_Ended;
+        _playback.Failed -= Playback_Failed;
+        _stateSaver.SaveFailed -= StateSaver_SaveFailed;
         Text.PropertyChanged -= Text_PropertyChanged;
+        _services.Dispose();
     }
 }

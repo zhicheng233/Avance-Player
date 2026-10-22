@@ -16,5 +16,6 @@
             <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
         </PackageReference>
         <PackageReference Include="TagLibSharp" Version="2.3.0" />
+        <PackageReference Include="LibVLCSharp" Version="3.10.2" />
     </ItemGroup>
 </Project>

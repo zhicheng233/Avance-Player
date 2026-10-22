@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.IO;
 using System.Runtime.CompilerServices;
 using Avalonia.Media.Imaging;
 
@@ -18,6 +19,22 @@ public sealed class Music : INotifyPropertyChanged {
     public required TimeSpan Duration { get; init; }
     public string DurationLabel => Duration.ToString(@"m\:ss");
     public string FilePath { get; init; } = string.Empty;
+
+    /// <summary>True for imported absolute paths; demo tracks keep relative paths.</summary>
+    public bool IsLocalFile {
+        get {
+            if (string.IsNullOrWhiteSpace(FilePath)) return false;
+            try {
+                return Path.IsPathFullyQualified(FilePath);
+            }
+            catch (Exception) {
+                return false;
+            }
+        }
+    }
+
+    /// <summary>True when this is an imported file that still exists on disk.</summary>
+    public bool HasPlayableFile => IsLocalFile && File.Exists(FilePath);
 
     /// <summary>
     /// Cover loaded from a sidecar image or the audio file's embedded picture. Demo tracks leave

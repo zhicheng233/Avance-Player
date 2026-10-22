@@ -115,7 +115,7 @@ public sealed class LocalizedText : INotifyPropertyChanged {
         ["QueueCount"] = "{0} songs in queue",
         ["QueueEmpty"] = "The queue is empty.",
         ["SettingsTitle"] = "Playback settings",
-        ["SettingsSubtitle"] = "Demo controls — audio output is simulated.",
+        ["SettingsSubtitle"] = "Local files play for real. Equalizer remains a preview.",
         ["GroupPlayback"] = "Playback",
         ["GroupTiming"] = "Timing",
         ["GroupLyrics"] = "Lyrics",
@@ -167,7 +167,15 @@ public sealed class LocalizedText : INotifyPropertyChanged {
         ["StatusFolderImported"] = "Imported {0} songs from “{1}” ({2} skipped).",
         ["StatusFolderEmpty"] = "No new songs found in “{0}”.",
         ["StatusFolderError"] = "Could not scan folder: {0}",
-        ["StatusFolderCancelled"] = "Folder scan cancelled."
+        ["StatusFolderCancelled"] = "Folder scan cancelled.",
+        ["StatusPlayingDemo"] = "Playing “{0}” (demo audio).",
+        ["StatusPlaybackUnavailable"] = "Audio playback is unavailable: {0}",
+        ["StatusFileMissing"] = "File not found: {0}",
+        ["StatusPlaybackFailed"] = "Playback failed: {0}",
+        ["StatusRestoringLibrary"] = "Restoring your library…",
+        ["StatusRestoreMissing"] = "{0} file(s) could not be found and were skipped.",
+        ["StatusStateLoadError"] = "Could not restore saved state: {0}",
+        ["StatusStateSaveError"] = "Could not save state: {0}"
     };
 
     private static readonly IReadOnlyDictionary<string, string> Chinese = new Dictionary<string, string>(StringComparer.Ordinal) {
@@ -278,7 +286,7 @@ public sealed class LocalizedText : INotifyPropertyChanged {
         ["QueueCount"] = "队列中共 {0} 首歌曲",
         ["QueueEmpty"] = "播放队列是空的。",
         ["SettingsTitle"] = "播放设置",
-        ["SettingsSubtitle"] = "演示控制项，尚未接入真实音频输出。",
+        ["SettingsSubtitle"] = "本地文件真实播放，均衡器仍为预览。",
         ["GroupPlayback"] = "播放",
         ["GroupTiming"] = "定时",
         ["GroupLyrics"] = "歌词",
@@ -330,7 +338,15 @@ public sealed class LocalizedText : INotifyPropertyChanged {
         ["StatusFolderImported"] = "已从「{1}」导入 {0} 首歌曲（跳过 {2} 首）。",
         ["StatusFolderEmpty"] = "「{0}」中没有找到新歌曲。",
         ["StatusFolderError"] = "文件夹扫描失败：{0}",
-        ["StatusFolderCancelled"] = "已取消文件夹扫描。"
+        ["StatusFolderCancelled"] = "已取消文件夹扫描。",
+        ["StatusPlayingDemo"] = "正在播放「{0}」（演示音频）。",
+        ["StatusPlaybackUnavailable"] = "音频后端不可用：{0}",
+        ["StatusFileMissing"] = "找不到文件：{0}",
+        ["StatusPlaybackFailed"] = "播放失败：{0}",
+        ["StatusRestoringLibrary"] = "正在恢复音乐库…",
+        ["StatusRestoreMissing"] = "有 {0} 个文件找不到，已跳过。",
+        ["StatusStateLoadError"] = "无法恢复保存的状态：{0}",
+        ["StatusStateSaveError"] = "无法保存状态：{0}"
     };
 
     private string _cultureName;
@@ -356,7 +372,17 @@ public sealed class LocalizedText : INotifyPropertyChanged {
 
     public void ToggleLanguage() => SetCulture(_cultureName == "zh-CN" ? "en-US" : "zh-CN");
 
-    private void SetCulture(string cultureName) {
+    public void SetCulture(string cultureName) {
+        if (string.Equals(cultureName, "zh-CN", StringComparison.OrdinalIgnoreCase)) {
+            cultureName = "zh-CN";
+        }
+        else if (string.Equals(cultureName, "en-US", StringComparison.OrdinalIgnoreCase)) {
+            cultureName = "en-US";
+        }
+        else {
+            return;
+        }
+
         if (_cultureName == cultureName) return;
         _cultureName = cultureName;
         CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo(cultureName);

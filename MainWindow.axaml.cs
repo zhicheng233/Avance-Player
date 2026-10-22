@@ -42,9 +42,10 @@ public partial class MainWindow : Window {
             if (_viewModel?.IsLyricsMode == true)
                 Dispatcher.UIThread.Post(ScrollActiveLyric, DispatcherPriority.Background);
         };
-        Opened += (_, _) => {
+        Opened += async (_, _) => {
             UpdateCompactLayout();
             PositionWindowOnScreen();
+            if (_viewModel is not null) await _viewModel.InitializeAsync();
         };
         Closed += (_, _) => {
             _floatingLyricsWindow?.Close();

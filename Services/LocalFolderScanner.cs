@@ -41,7 +41,11 @@ public sealed class LocalFolderScanner {
 
     private static readonly Regex LeadingTrackNumber = new(@"^\s*\d{1,3}\s*[-._ ]\s*(.+)$", RegexOptions.Compiled);
 
-    private readonly LyricsService _lyricsService = new();
+    private readonly LyricsService _lyricsService;
+
+    public LocalFolderScanner(LyricsService? lyricsService = null) {
+        _lyricsService = lyricsService ?? new LyricsService();
+    }
 
     public async Task<LocalFolderScanResult> ScanAsync(
         string rootFolder,
@@ -82,6 +86,81 @@ public sealed class LocalFolderScanner {
         }
 
         return new LocalFolderScanResult(tracks, audioFiles.Count, audioFiles.Count - tracks.Count, warnings);
+    }
+
+    /// <summary>
+    /// Loads a known set of paths, preserving the requested order. This is used when restoring a
+    /// persisted library; unlike <see cref="ScanAsync"/> it does not recursively enumerate the
+    /// folder, so unrelated files added since the last run are not imported implicitly.
+    /// </summary>
+    public async Task<LocalFolderScanResult> LoadTracksAsync(
+        IReadOnlyList<string> paths,
+        LocalFolderScanLabels labels,
+        CancellationToken cancellationToken = default) {
+        var comparer = OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+        var seen = new HashSet<string>(comparer);
+        var requested = new List<string>(paths.Count);
+        foreach (var path in paths) {
+            if (string.IsNullOrWhiteSpace(path) || !seen.Add(path)) continue;
+            try {
+                if (!AudioExtensions.Contains(Path.GetExtension(path))) continue;
+                if (!File.Exists(path)) continue;
+                requested.Add(path);
+            }
+            catch (Exception exception) when (exception is ArgumentException
+                                                  or NotSupportedException
+                                                  or PathTooLongException) {
+                // Ignore malformed persisted paths instead of failing the whole restore.
+            }
+        }
+
+        var coverPathCache = new Dictionary<string, string?>(comparer);
+        var coverBitmapCache = new Dictionary<string, Bitmap?>(comparer);
+        var siblingCountCache = new Dictionary<string, int>(comparer);
+        var tracks = new List<Music>(requested.Count);
+        var warnings = new List<string>();
+
+        foreach (var path in requested) {
+            cancellationToken.ThrowIfCancellationRequested();
+            try {
+                var directory = Path.GetDirectoryName(path) ?? string.Empty;
+                if (!siblingCountCache.TryGetValue(directory, out var siblingCount)) {
+                    siblingCount = CountAudioFilesInDirectory(directory);
+                    siblingCountCache[directory] = siblingCount;
+                }
+
+                var track = await CreateTrackAsync(
+                    path,
+                    directory,
+                    siblingCount,
+                    labels,
+                    coverPathCache,
+                    coverBitmapCache,
+                    warnings,
+                    cancellationToken).ConfigureAwait(false);
+                if (track is not null) tracks.Add(track);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or NotSupportedException) {
+                warnings.Add($"{Path.GetFileName(path)}: {exception.Message}");
+            }
+        }
+
+        return new LocalFolderScanResult(tracks, requested.Count, requested.Count - tracks.Count, warnings);
+    }
+
+    private static int CountAudioFilesInDirectory(string directory) {
+        if (string.IsNullOrWhiteSpace(directory)) return 1;
+
+        try {
+            var count = Directory.EnumerateFiles(directory, "*", SearchOption.TopDirectoryOnly)
+                .Count(path => AudioExtensions.Contains(Path.GetExtension(path)));
+            return Math.Max(1, count);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or NotSupportedException) {
+            return 1;
+        }
     }
 
     private static List<string> EnumerateAudioFiles(string rootFolder) {
