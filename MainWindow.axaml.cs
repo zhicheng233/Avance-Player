@@ -1,5 +1,6 @@
 using Avalonia;
 using System;
+using System.Diagnostics;
 using System.Linq;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -16,6 +17,7 @@ namespace Avance_Player;
 
 public partial class MainWindow : Window {
     private static readonly TimeSpan LyricScrollDuration = TimeSpan.FromMilliseconds(460);
+    private static readonly long SongRowDoubleTapTicks = (long)(Stopwatch.Frequency * 0.45);
 
     private WindowState _windowStateBeforeFullscreen = WindowState.Normal;
     private MainWindowViewModel? _viewModel;
@@ -25,6 +27,9 @@ public partial class MainWindow : Window {
     private double _lyricScrollFrom;
     private double _lyricScrollTo;
     private DateTime _lyricScrollStarted;
+    private Music? _lastTappedTrack;
+    private long _lastTapTimestamp;
+    private long _lastRowPlaybackTimestamp;
 
     public MainWindow() {
         InitializeComponent();
@@ -54,11 +59,45 @@ public partial class MainWindow : Window {
         _viewModel.IsCompactLayout = Bounds.Width < 1120;
     }
 
+    private void SongRow_Tapped(object? sender, TappedEventArgs e) {
+        if (!TryGetSongRowTrack(sender, e, out var track)) return;
+
+        // Detect the second tap ourselves instead of relying on platform double-click counts.
+        // The row only has a double-click action, so a single tap is intentionally a no-op.
+        var now = Stopwatch.GetTimestamp();
+        if (ReferenceEquals(track, _lastTappedTrack) && now - _lastTapTimestamp <= SongRowDoubleTapTicks) {
+            _lastTappedTrack = null;
+            _lastTapTimestamp = 0;
+            PlaySongRow(track, now);
+            e.Handled = true;
+            return;
+        }
+
+        _lastTappedTrack = track;
+        _lastTapTimestamp = now;
+    }
+
     private void SongRow_DoubleTapped(object? sender, TappedEventArgs e) {
-        if (_viewModel is null || sender is not Control { DataContext: Music track }) return;
-        if (e.Source is Visual source && source.FindAncestorOfType<Button>(includeSelf: true) is not null) return;
-        _viewModel.PlayTrackCommand.Execute(track);
+        if (!TryGetSongRowTrack(sender, e, out var track)) return;
+        _lastTappedTrack = null;
+        _lastTapTimestamp = 0;
+        PlaySongRow(track, Stopwatch.GetTimestamp());
         e.Handled = true;
+    }
+
+    private bool TryGetSongRowTrack(object? sender, TappedEventArgs e, out Music track) {
+        track = null!;
+        if (_viewModel is null || sender is not Control { DataContext: Music rowTrack }) return false;
+        if (e.Source is Visual source && source.FindAncestorOfType<Button>(includeSelf: true) is not null) return false;
+        track = rowTrack;
+        return true;
+    }
+
+    private void PlaySongRow(Music track, long now) {
+        // A platform may report both Tapped and DoubleTapped for the same gesture; keep one play.
+        if (now - _lastRowPlaybackTimestamp < Stopwatch.Frequency / 10) return;
+        _lastRowPlaybackTimestamp = now;
+        _viewModel?.PlayTrackCommand.Execute(track);
     }
 
     private void ContentRoot_PointerPressed(object? sender, PointerPressedEventArgs e) {

@@ -17,8 +17,8 @@
     <Window.Resources>
         <DataTemplate x:Key="SongRowTemplate" x:DataType="models:Music">
             <Border Classes="song-row" Padding="10,8" CornerRadius="12"
-                    DoubleTapped="SongRow_DoubleTapped">
-                <Grid ColumnDefinitions="34,48,*,Auto,Auto" ColumnSpacing="14">
+                    Tapped="SongRow_Tapped" DoubleTapped="SongRow_DoubleTapped">
+                <Grid Classes="song-row-content" ColumnDefinitions="34,48,*,Auto,Auto" ColumnSpacing="14">
                     <TextBlock Grid.Column="0" Text="♪" Foreground="#7C766B" FontSize="15"
                                VerticalAlignment="Center" HorizontalAlignment="Center" />
                     <Border Grid.Column="1" Width="46" Height="46" CornerRadius="9" ClipToBounds="True">
@@ -56,8 +56,8 @@
 
         <DataTemplate x:Key="PlaylistTrackTemplate" x:DataType="models:Music">
             <Border Classes="song-row" Padding="10,8" CornerRadius="12"
-                    DoubleTapped="SongRow_DoubleTapped">
-                <Grid ColumnDefinitions="48,*,Auto,Auto" ColumnSpacing="14">
+                    Tapped="SongRow_Tapped" DoubleTapped="SongRow_DoubleTapped">
+                <Grid Classes="song-row-content" ColumnDefinitions="48,*,Auto,Auto" ColumnSpacing="14">
                     <Border Grid.Column="0" Width="46" Height="46" CornerRadius="9" Background="{Binding ArtworkColor, Converter={StaticResource ArtworkColorConverter}}">
                         <TextBlock Text="♪" FontSize="20" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
@@ -160,7 +160,7 @@
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:CategoryGroupViewModel">
                                 <Button Classes="category-card" Command="{Binding $parent[Window].DataContext.OpenCategoryGroupCommand}" CommandParameter="{Binding}">
-                                    <Grid RowDefinitions="*,Auto" Width="190" Height="180">
+                                    <Grid Classes="card-content" RowDefinitions="*,Auto" Width="190" Height="180">
                                         <Border Grid.RowSpan="2" CornerRadius="18" Background="#2C2922" ClipToBounds="True">
                                             <Grid>
                                                 <Border Background="{Binding ArtworkColor, Converter={StaticResource ArtworkColorConverter}}" Opacity="0.55" HorizontalAlignment="Right" VerticalAlignment="Top" Width="140" Height="140" CornerRadius="75" Margin="0,-44,-26,0" />
@@ -201,7 +201,7 @@
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="models:Playlist">
                                 <Button Classes="playlist-card" Command="{Binding $parent[Window].DataContext.OpenPlaylistCommand}" CommandParameter="{Binding}">
-                                    <StackPanel Width="205" Spacing="13">
+                                    <StackPanel Classes="card-content" Width="205" Spacing="13">
                                         <Border Height="142" CornerRadius="14" ClipToBounds="True">
                                             <Grid>
                                                 <Border Background="#4A3D2E" />
@@ -283,7 +283,7 @@
             <Setter Property="RenderTransformOrigin" Value="50%,50%" />
         </Style>
         <Style Selector="ToggleButton.nav-item">
-            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Background" Value="#001D1D1A" />
             <Setter Property="Foreground" Value="#9C9587" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="Padding" Value="13,10" />
@@ -430,7 +430,7 @@
             <Setter Property="Height" Value="30" />
             <Setter Property="Padding" Value="0" />
             <Setter Property="CornerRadius" Value="15" />
-            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Background" Value="#00332F29" />
             <Setter Property="Foreground" Value="#BDB6A8" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="FontSize" Value="13" />
@@ -452,7 +452,7 @@
             <Setter Property="Height" Value="30" />
             <Setter Property="Padding" Value="0" />
             <Setter Property="CornerRadius" Value="15" />
-            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Background" Value="#00332F29" />
             <Setter Property="Foreground" Value="#E6DFD2" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="FontSize" Value="14" />
@@ -511,7 +511,7 @@
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
         <Style Selector="Button.queue-row">
-            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Background" Value="#002E2B26" />
             <Setter Property="BorderThickness" Value="0" />
             <!-- Stretch keeps every row the full panel width so the duration column lines up. -->
             <Setter Property="HorizontalAlignment" Value="Stretch" />
@@ -529,7 +529,7 @@
             <Setter Property="Foreground" Value="#F6EFE0" />
         </Style>
         <Style Selector="Button.menu-row">
-            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Background" Value="#002E2B26" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="Padding" Value="8,7" />
             <Setter Property="CornerRadius" Value="10" />
@@ -608,17 +608,29 @@
             <Setter Property="RenderTransform" Value="scale(1.1)" />
         </Style>
         <Style Selector="Border.song-row">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="RenderTransform" Value="translateX(0px)" />
+            <Setter Property="Background" Value="#001E1D19" />
             <Setter Property="Transitions">
                 <Transitions>
-                    <BrushTransition Property="Background" Duration="0:0:0.18" />
-                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.18" Easing="CubicEaseOut" />
+                    <!-- Fade the highlight out slowly; a short fade-off reads as a flash when
+                         the pointer travels across several rows. -->
+                    <BrushTransition Property="Background" Duration="0:0:0.40" Easing="SineEaseInOut" />
                 </Transitions>
             </Setter>
         </Style>
         <Style Selector="Border.song-row:pointerover">
             <Setter Property="Background" Value="#1E1D19" />
+        </Style>
+        <!-- Move only the row content on hover. Transforming the row Border itself changes its hit
+             area, which can toggle :pointerover at the edge and make the highlight flicker. -->
+        <Style Selector="Border.song-row > Grid.song-row-content">
+            <Setter Property="RenderTransform" Value="translateX(0px)" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.24" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Border.song-row:pointerover > Grid.song-row-content">
             <Setter Property="RenderTransform" Value="translateX(4px)" />
         </Style>
         <Style Selector="Button.category-card, Button.playlist-card">
@@ -627,15 +639,41 @@
             <Setter Property="Margin" Value="0,0,14,14" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-            <Setter Property="RenderTransform" Value="translateY(0px) scale(1)" />
         </Style>
+        <!-- Keep the Fluent button template from painting its own hover/pressed wash over the card. -->
         <Style Selector="Button.category-card:pointerover, Button.playlist-card:pointerover">
-            <!-- Lift and scale only: fading the whole card makes the page behind it show through,
-                 which reads as a rendering glitch rather than a hover state. -->
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+        <Style Selector="Button.category-card:pressed, Button.playlist-card:pressed">
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+        <Style Selector="Button.category-card /template/ ContentPresenter#PART_ContentPresenter,
+                       Button.playlist-card /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+        </Style>
+        <Style Selector="Button.category-card:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                       Button.playlist-card:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+        <Style Selector="Button.category-card:pressed /template/ ContentPresenter#PART_ContentPresenter,
+                       Button.playlist-card:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+        <!-- Lift the card content, not the Button, so the hover hit area stays fixed. -->
+        <Style Selector="Button.category-card > Grid.card-content, Button.playlist-card > StackPanel.card-content">
+            <Setter Property="RenderTransform" Value="translateY(0px) scale(1)" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.20" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Button.category-card:pointerover > Grid.card-content, Button.playlist-card:pointerover > StackPanel.card-content">
             <Setter Property="RenderTransform" Value="translateY(-3px) scale(1.012)" />
         </Style>
         <Style Selector="Button.transport-button">
-            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Background" Value="#00000000" />
             <Setter Property="Foreground" Value="#DCD4C5" />
             <Setter Property="FontSize" Value="18" />
             <Setter Property="Padding" Value="10" />
@@ -655,7 +693,7 @@
             <Setter Property="Height" Value="30" />
             <Setter Property="Padding" Value="0" />
             <Setter Property="CornerRadius" Value="15" />
-            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Background" Value="#00332F29" />
             <Setter Property="Foreground" Value="#A8A193" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
@@ -690,7 +728,7 @@
             <Setter Property="RenderTransform" Value="scale(1.06)" />
         </Style>
         <Style Selector="Button.lyric-line">
-            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Background" Value="#002E2A23" />
             <Setter Property="Padding" Value="14,12" />
             <Setter Property="CornerRadius" Value="18" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
@@ -699,19 +737,29 @@
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="Foreground" Value="#A8A193" />
             <Setter Property="Opacity" Value="0.48" />
-            <Setter Property="RenderTransform" Value="translateX(0px)" />
             <Setter Property="Transitions">
                 <Transitions>
                     <DoubleTransition Property="Opacity" Duration="0:0:0.35" />
                     <DoubleTransition Property="FontSize" Duration="0:0:0.28" Easing="CubicEaseOut" />
                     <BrushTransition Property="Background" Duration="0:0:0.35" />
                     <BrushTransition Property="Foreground" Duration="0:0:0.35" />
-                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.24" Easing="CubicEaseOut" />
                 </Transitions>
             </Setter>
         </Style>
         <Style Selector="Button.lyric-line:pointerover">
             <Setter Property="Opacity" Value="0.82" />
+        </Style>
+        <!-- Shift the lyric text inside a stationary pill; moving the Button would move its hit
+             area and can toggle :pointerover at the edge. -->
+        <Style Selector="Button.lyric-line > StackPanel.lyric-line-content">
+            <Setter Property="RenderTransform" Value="translateX(0px)" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.24" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Button.lyric-line:pointerover > StackPanel.lyric-line-content">
             <Setter Property="RenderTransform" Value="translateX(6px)" />
         </Style>
         <Style Selector="Button.lyric-line.current">
@@ -785,7 +833,7 @@
                         <ItemsControl ItemsSource="{Binding Playlists}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="models:Playlist">
-                                    <Button Classes="nav-item" Background="Transparent" Foreground="#96939D" BorderThickness="0"
+                                    <Button Classes="nav-item" Background="#001D1D1A" Foreground="#96939D" BorderThickness="0"
                                             HorizontalContentAlignment="Left" Padding="12,9" CornerRadius="13"
                                             Command="{Binding $parent[Window].DataContext.OpenPlaylistCommand}" CommandParameter="{Binding}">
                                         <StackPanel Orientation="Horizontal" Spacing="10">

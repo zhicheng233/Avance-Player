@@ -101,7 +101,7 @@
                                 <DataTemplate x:DataType="models:LyricLine">
                                     <Button Classes="lyric-line" Classes.current="{Binding IsCurrent}" HorizontalContentAlignment="Stretch"
                                             Command="{Binding $parent[UserControl].DataContext.SeekToLyricCommand}" CommandParameter="{Binding}">
-                                        <StackPanel Spacing="4">
+                                        <StackPanel Classes="lyric-line-content" Spacing="4">
                                             <controls:LyricLineTextBlock Line="{Binding}" TextWrapping="Wrap"
                                                                          AccentBrush="{Binding $parent[UserControl].DataContext.Palette.Accent, Converter={StaticResource ArtworkColorConverter}}"
                                                                          FutureBrush="#8F887B" />
