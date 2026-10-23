@@ -4,6 +4,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Avance_Player.Models;
+using Avance_Player.Services.Lyrics;
 
 namespace Avance_Player.Services.Persistence;
 
@@ -18,9 +19,11 @@ public sealed record RestoredLibrary(
 /// </summary>
 public sealed class LibraryRestorer {
     private readonly LocalFolderScanner _scanner;
+    private readonly LyricsService _lyrics;
 
-    public LibraryRestorer(LocalFolderScanner scanner) {
+    public LibraryRestorer(LocalFolderScanner scanner, LyricsService? lyrics = null) {
         _scanner = scanner;
+        _lyrics = lyrics ?? new LyricsService();
     }
 
     public async Task<RestoredLibrary> RestoreAsync(
@@ -85,6 +88,51 @@ public sealed class LibraryRestorer {
             if (!byPath.ContainsKey(path)) missing.Add(path);
         }
 
+        await ApplySavedLyricsAsync(state, byPath, cancellationToken).ConfigureAwait(false);
         return new RestoredLibrary(result.Tracks, byPath, missing);
+    }
+
+    /// <summary>
+    /// Reapplies lyric files that were chosen manually from outside the audio folder. Sidecar
+    /// files are already handled by the scanner; this layer only needs to restore explicit paths.
+    /// A missing or unreadable lyric file is ignored so the rest of the library still restores.
+    /// </summary>
+    private async Task ApplySavedLyricsAsync(
+        PlayerState state,
+        Dictionary<string, Music> byPath,
+        CancellationToken cancellationToken) {
+        if (state.Library.LyricPaths is not { Count: > 0 } savedPaths) return;
+
+        foreach (var pair in savedPaths) {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (string.IsNullOrWhiteSpace(pair.Key) || string.IsNullOrWhiteSpace(pair.Value)) continue;
+            if (!byPath.TryGetValue(pair.Key, out var track)) continue;
+
+            var lyricsPath = pair.Value;
+            try {
+                if (!Path.IsPathFullyQualified(lyricsPath) || !File.Exists(lyricsPath)) continue;
+            }
+            catch (Exception) {
+                continue;
+            }
+
+            try {
+                var document = await _lyrics.LoadAsync(lyricsPath, track.Duration, cancellationToken)
+                    .ConfigureAwait(false);
+                track.Lyrics = document.Lines;
+                track.LyricsFormat = document.Format;
+                track.LyricsSourcePath = lyricsPath;
+                track.HasManualLyrics = true;
+            }
+            catch (OperationCanceledException) {
+                throw;
+            }
+            catch (LyricsParseException) {
+                // Keep any sidecar lyrics the scanner already attached.
+            }
+            catch (Exception) {
+                // An unreadable manual file should not fail the whole restore.
+            }
+        }
     }
 }

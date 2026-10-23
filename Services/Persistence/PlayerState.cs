@@ -7,7 +7,9 @@ namespace Avance_Player.Services.Persistence;
 /// bases, mirroring the small composition-oriented services used by the playback layer.
 /// </summary>
 public sealed class PlayerState {
-    public const int CurrentVersion = 1;
+    // Version 2 adds LibrarySettings.LyricPaths. Older files remain readable because the new
+    // collection defaults to empty when the property is absent.
+    public const int CurrentVersion = 2;
 
     public int Version { get; init; } = CurrentVersion;
     public PlaybackSettings Playback { get; init; } = new();
@@ -29,6 +31,12 @@ public sealed class PlaybackSettings {
 public sealed class LibrarySettings {
     public List<string> TrackPaths { get; init; } = [];
     public List<PlaylistState> Playlists { get; init; } = [];
+
+    /// <summary>
+    /// Manual lyric-file imports keyed by the audio track path. Sidecar lyrics are re-discovered
+    /// by the scanner, but a file chosen from an arbitrary location has to be remembered here.
+    /// </summary>
+    public Dictionary<string, string> LyricPaths { get; init; } = [];
 }
 
 public sealed class PlaylistState {

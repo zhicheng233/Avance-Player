@@ -43,7 +43,7 @@ public sealed class PlayerServices : IDisposable {
         var playback = new PlaybackService(switchable);
         var stateStore = new JsonPlayerStateStore(statePath);
         var stateSaver = new DebouncedStateSaver(stateStore);
-        var libraryRestorer = new LibraryRestorer(scanner);
+        var libraryRestorer = new LibraryRestorer(scanner, lyrics);
         return new PlayerServices(playback, stateStore, stateSaver, scanner, libraryRestorer, lyrics);
     }
 

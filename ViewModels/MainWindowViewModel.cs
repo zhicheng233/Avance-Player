@@ -599,7 +599,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             var track = CurrentTrack;
             var document = await _lyricsService.LoadAsync(path, track.Duration);
             if (!ReferenceEquals(track, CurrentTrack)) return;
-            ApplyLyrics(document, Path.GetFileName(path));
+            // Keep the full path so the manual choice survives a restart; the status message
+            // still shows only the file name.
+            ApplyLyrics(document, path, manual: true);
+            QueueStateSave();
             ActivePopover = string.Empty;
         }
         catch (LyricsParseException exception) {
@@ -611,10 +614,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     }
 
     /// <summary>Attaches parsed lyrics to the current track and refreshes every lyric binding.</summary>
-    public void ApplyLyrics(LyricsDocument document, string? sourcePath = null) {
+    public void ApplyLyrics(LyricsDocument document, string? sourcePath = null, bool manual = false) {
         CurrentTrack.Lyrics = document.Lines;
         CurrentTrack.LyricsFormat = document.Format;
         CurrentTrack.LyricsSourcePath = sourcePath;
+        CurrentTrack.HasManualLyrics = manual;
 
         _lastCurrentLyricIndex = int.MinValue;
         UpdateCurrentLyric();
@@ -630,11 +634,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     }
 
     /// <summary>
-    /// Sidecar loading is deliberately conservative: it only runs for tracks that have no lyrics
-    /// yet, so imported or demo lyrics are never replaced behind the user's back.
+    /// Sidecar loading is deliberately conservative: it only runs for tracks without manual or
+    /// existing lyrics, so imported or demo lyrics are never replaced behind the user's back.
     /// </summary>
     private async Task TryLoadSidecarForCurrentTrackAsync(Music track) {
-        if (track.Lyrics.Count > 0) return;
+        if (track.HasManualLyrics || track.Lyrics.Count > 0) return;
 
         try {
             var document = await _lyricsService.TryLoadSidecarAsync(track.FilePath, track.Duration);
@@ -1271,6 +1275,25 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             })
             .ToList();
 
+        var lyricPaths = new Dictionary<string, string>(comparer);
+        void RememberLyrics(Music track) {
+            if (!track.HasManualLyrics
+                || string.IsNullOrWhiteSpace(track.FilePath)
+                || string.IsNullOrWhiteSpace(track.LyricsSourcePath)) return;
+            try {
+                // Do not probe the file here: a disconnected network share must not block the
+                // UI-thread state snapshot. The restorer checks existence off the UI thread.
+                if (!Path.IsPathFullyQualified(track.LyricsSourcePath)) return;
+            }
+            catch (Exception) {
+                return;
+            }
+            lyricPaths[track.FilePath] = track.LyricsSourcePath;
+        }
+
+        foreach (var track in Tracks) RememberLyrics(track);
+        RememberLyrics(CurrentTrack);
+
         return new PlayerState {
             Version = PlayerState.CurrentVersion,
             Playback = new PlaybackSettings {
@@ -1285,7 +1308,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             },
             Library = new LibrarySettings {
                 TrackPaths = trackPaths,
-                Playlists = playlists
+                Playlists = playlists,
+                LyricPaths = lyricPaths
             },
             Ui = new UiSettings {
                 Language = Text.CultureName,

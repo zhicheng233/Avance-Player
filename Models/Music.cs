@@ -82,6 +82,12 @@ public sealed class Music : INotifyPropertyChanged {
     /// <summary>Original file name/path, used for the load status message.</summary>
     public string? LyricsSourcePath { get; set; }
 
+    /// <summary>
+    /// True when the user explicitly chose a lyric file. Only these paths are persisted; sidecar
+    /// lyrics are rediscovered by the scanner so a newer sidecar can still win after restart.
+    /// </summary>
+    public bool HasManualLyrics { get; set; }
+
     /// <summary>Set by the player so queue rows can highlight the current track.</summary>
     public bool IsCurrent {
         get => _isCurrent;
