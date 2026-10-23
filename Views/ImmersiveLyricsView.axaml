@@ -6,35 +6,6 @@
              x:Class="Avance_Player.Views.ImmersiveLyricsView"
              x:DataType="vm:MainWindowViewModel"
              ClipToBounds="True">
-    <UserControl.Styles>
-        <!-- Very slow opacity breathing on the artwork glow. PlaybackBehavior.Auto pauses these
-             style animations while the lyrics view is hidden, so normal mode pays nothing. -->
-        <Style Selector="Ellipse.breathe">
-            <Style.Animations>
-                <Animation Duration="0:0:7" IterationCount="Infinite" PlaybackDirection="Alternate" Easing="SineEaseInOut">
-                    <KeyFrame Cue="0%">
-                        <Setter Property="Opacity" Value="0.22" />
-                    </KeyFrame>
-                    <KeyFrame Cue="100%">
-                        <Setter Property="Opacity" Value="0.44" />
-                    </KeyFrame>
-                </Animation>
-            </Style.Animations>
-        </Style>
-        <Style Selector="Ellipse.breathe-slow">
-            <Style.Animations>
-                <Animation Duration="0:0:10" IterationCount="Infinite" PlaybackDirection="Alternate" Easing="SineEaseInOut">
-                    <KeyFrame Cue="0%">
-                        <Setter Property="Opacity" Value="0.18" />
-                    </KeyFrame>
-                    <KeyFrame Cue="100%">
-                        <Setter Property="Opacity" Value="0.36" />
-                    </KeyFrame>
-                </Animation>
-            </Style.Animations>
-        </Style>
-    </UserControl.Styles>
-
     <Grid>
         <controls:FluidBackdrop x:Name="Backdrop"
                                 BaseBrush="{Binding LyricsBackdropBase, Converter={StaticResource ArtworkColorConverter}}"
@@ -66,11 +37,6 @@
                         <Grid>
                             <Border Classes="artwork-fade" Background="{Binding CurrentTrack.ArtworkColor, Converter={StaticResource ArtworkColorConverter}}" />
                             <Image Source="{Binding CurrentTrack.Artwork}" Stretch="UniformToFill" />
-                            <Ellipse Classes="breathe" Width="280" Height="280" Fill="{Binding LyricsBackdropSecondary, Converter={StaticResource ArtworkColorConverter}}" Opacity="0.38" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-82,-86,0" />
-                            <Ellipse Classes="breathe-slow" Width="240" Height="240" Fill="{Binding LyricsBackdropAccent, Converter={StaticResource ArtworkColorConverter}}" Opacity="0.34" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="-58,0,0,-98" />
-                            <Border Width="112" Height="112" CornerRadius="58" Background="#221F1A" BorderBrush="#F5EFE2" BorderThickness="1" HorizontalAlignment="Center" VerticalAlignment="Center">
-                                <Border Width="24" Height="24" CornerRadius="13" Background="#F5EFE2" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                            </Border>
                         </Grid>
                     </Border>
                     <StackPanel Spacing="6" HorizontalAlignment="Center">
