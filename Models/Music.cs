@@ -45,6 +45,14 @@ public sealed class Music : INotifyPropertyChanged {
     /// <summary>Source path of the sidecar cover, when one was found.</summary>
     public string? ArtworkPath { get; init; }
 
+    /// <summary>
+    /// Cover-derived background, accent, and secondary colours for the immersive fluid backdrop.
+    /// They are null for demo tracks, which fall back to the muted UI palette.
+    /// </summary>
+    public string? ArtworkAccentColor { get; init; }
+    public string? ArtworkSecondaryColor { get; init; }
+    public string? ArtworkBackgroundColor { get; init; }
+
     /// <summary>Bitrate of the local file in kbps, used to derive the quality tier label.</summary>
     public int BitrateKbps { get; init; } = 1411;
     public string BitrateLabel => $"{BitrateKbps} kbps";

@@ -211,6 +211,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     public LocalizedText Text { get; }
     public MonetPalette Palette { get; private set; }
 
+    /// <summary>
+    /// Cover-derived colours for the immersive fluid field. Demo tracks have no bitmap, so they
+    /// fall back to the same muted palette used by the rest of the UI.
+    /// </summary>
+    public string LyricsBackdropBase => CurrentTrack.ArtworkBackgroundColor ?? Palette.WindowBackground;
+    public string LyricsBackdropAccent => CurrentTrack.ArtworkAccentColor ?? Palette.Accent;
+    public string LyricsBackdropSecondary => CurrentTrack.ArtworkSecondaryColor ?? Palette.AccentSecondary;
+
     public RelayCommand NavigateCommand { get; }
     public RelayCommand OpenPlaylistCommand { get; }
     public RelayCommand OpenCategoryGroupCommand { get; }
@@ -503,6 +511,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             OnPropertyChanged(nameof(NoLyricsAvailable));
             Palette = MonetPaletteService.FromColorSeed(value.ArtworkColor);
             OnPropertyChanged(nameof(Palette));
+            OnPropertyChanged(nameof(LyricsBackdropBase));
+            OnPropertyChanged(nameof(LyricsBackdropAccent));
+            OnPropertyChanged(nameof(LyricsBackdropSecondary));
             _lastCurrentLyricIndex = int.MinValue;
             UpdateCurrentLyric();
             OnPropertyChanged(nameof(CurrentLyricIndex));
@@ -694,7 +705,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         var nextValue = Math.Clamp(seconds, 0, CurrentDurationSeconds);
         if (Math.Abs(_currentPositionSeconds - nextValue) < 0.001) return;
         _currentPositionSeconds = nextValue;
-        OnPropertyChanged();
+        // This method is not a property setter, so CallerMemberName would report "SetPosition"
+        // and bindings such as the seek bar would never see the playback clock advance.
+        OnPropertyChanged(nameof(CurrentPositionSeconds));
         OnPropertyChanged(nameof(CurrentTimeLabel));
         UpdateCurrentLyric();
         if (seek && !_suppressSeek && _playback.IsLoaded) {

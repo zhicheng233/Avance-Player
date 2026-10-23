@@ -34,7 +34,8 @@ public sealed class LocalFolderScanner {
     private static readonly string[] CoverExtensions = [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"];
     private static readonly string[] CoverPriority = ["cover", "folder", "front", "album", "artwork"];
 
-    // Imported tracks have no demo artwork seed, so pick a stable warm swatch from the path.
+    // Fallback swatch for files without readable cover art. Tracks with artwork use the sampled
+    // dominant cover colour instead, so the palette follows the album image.
     private static readonly string[] ArtworkColors = [
         "#5F7F72", "#3F7A86", "#B3785A", "#B66F6B", "#A88E5E", "#5C8471", "#4B7B84", "#7C6A8A"
     ];
@@ -61,6 +62,7 @@ public sealed class LocalFolderScanner {
             .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
         var coverPathCache = new Dictionary<string, string?>(StringComparer.Ordinal);
         var coverBitmapCache = new Dictionary<string, Bitmap?>(StringComparer.Ordinal);
+        var coverPaletteCache = new Dictionary<string, ArtworkPalette?>(StringComparer.Ordinal);
         var tracks = new List<Music>(audioFiles.Count);
         var warnings = new List<string>();
 
@@ -76,6 +78,7 @@ public sealed class LocalFolderScanner {
                     labels,
                     coverPathCache,
                     coverBitmapCache,
+                    coverPaletteCache,
                     warnings,
                     cancellationToken).ConfigureAwait(false);
                 if (track is not null) tracks.Add(track);
@@ -118,6 +121,7 @@ public sealed class LocalFolderScanner {
 
         var coverPathCache = new Dictionary<string, string?>(comparer);
         var coverBitmapCache = new Dictionary<string, Bitmap?>(comparer);
+        var coverPaletteCache = new Dictionary<string, ArtworkPalette?>(comparer);
         var siblingCountCache = new Dictionary<string, int>(comparer);
         var tracks = new List<Music>(requested.Count);
         var warnings = new List<string>();
@@ -138,6 +142,7 @@ public sealed class LocalFolderScanner {
                     labels,
                     coverPathCache,
                     coverBitmapCache,
+                    coverPaletteCache,
                     warnings,
                     cancellationToken).ConfigureAwait(false);
                 if (track is not null) tracks.Add(track);
@@ -190,6 +195,7 @@ public sealed class LocalFolderScanner {
         LocalFolderScanLabels labels,
         Dictionary<string, string?> coverPathCache,
         Dictionary<string, Bitmap?> coverBitmapCache,
+        Dictionary<string, ArtworkPalette?> coverPaletteCache,
         List<string> warnings,
         CancellationToken cancellationToken) {
         TagFile? tagFile = null;
@@ -216,6 +222,17 @@ public sealed class LocalFolderScanner {
             var artwork = coverPath is null ? null : LoadBitmap(coverPath, coverBitmapCache);
             if (artwork is null) artwork = LoadEmbeddedArtwork(tagFile);
 
+            ArtworkPalette? coverPalette = null;
+            if (artwork is not null) {
+                if (coverPath is null) {
+                    coverPalette = ArtworkPaletteExtractor.Extract(artwork);
+                }
+                else if (!coverPaletteCache.TryGetValue(coverPath, out coverPalette)) {
+                    coverPalette = ArtworkPaletteExtractor.Extract(artwork);
+                    coverPaletteCache[coverPath] = coverPalette;
+                }
+            }
+
             var (lyrics, lyricsPath) = await TryLoadSameBaseLyricsAsync(path, duration, warnings, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -233,11 +250,14 @@ public sealed class LocalFolderScanner {
                 Album = album,
                 Genre = genre,
                 Duration = duration,
-                ArtworkColor = PickArtworkColor(path),
+                ArtworkColor = coverPalette?.DominantColor ?? PickArtworkColor(path),
                 FilePath = path,
                 BitrateKbps = bitrate,
                 Artwork = artwork,
-                ArtworkPath = coverPath
+                ArtworkPath = coverPath,
+                ArtworkAccentColor = coverPalette?.AccentColor,
+                ArtworkSecondaryColor = coverPalette?.SecondaryColor,
+                ArtworkBackgroundColor = coverPalette?.BackgroundColor
             };
 
             if (lyrics is not null) {

@@ -37,9 +37,9 @@
 
     <Grid>
         <controls:FluidBackdrop x:Name="Backdrop"
-                                BaseBrush="{Binding Palette.WindowBackground, Converter={StaticResource ArtworkColorConverter}}"
-                                AccentBrush="{Binding Palette.Accent, Converter={StaticResource ArtworkColorConverter}}"
-                                SecondaryBrush="{Binding Palette.AccentSecondary, Converter={StaticResource ArtworkColorConverter}}"
+                                BaseBrush="{Binding LyricsBackdropBase, Converter={StaticResource ArtworkColorConverter}}"
+                                AccentBrush="{Binding LyricsBackdropAccent, Converter={StaticResource ArtworkColorConverter}}"
+                                SecondaryBrush="{Binding LyricsBackdropSecondary, Converter={StaticResource ArtworkColorConverter}}"
                                 Phase="{Binding AmbientPhase}" />
         <Border Background="#220F0E0C" />
 
@@ -66,8 +66,8 @@
                         <Grid>
                             <Border Classes="artwork-fade" Background="{Binding CurrentTrack.ArtworkColor, Converter={StaticResource ArtworkColorConverter}}" />
                             <Image Source="{Binding CurrentTrack.Artwork}" Stretch="UniformToFill" />
-                            <Ellipse Classes="breathe" Width="280" Height="280" Fill="{Binding Palette.AccentSecondary, Converter={StaticResource ArtworkColorConverter}}" Opacity="0.38" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-82,-86,0" />
-                            <Ellipse Classes="breathe-slow" Width="240" Height="240" Fill="{Binding Palette.Accent, Converter={StaticResource ArtworkColorConverter}}" Opacity="0.34" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="-58,0,0,-98" />
+                            <Ellipse Classes="breathe" Width="280" Height="280" Fill="{Binding LyricsBackdropSecondary, Converter={StaticResource ArtworkColorConverter}}" Opacity="0.38" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-82,-86,0" />
+                            <Ellipse Classes="breathe-slow" Width="240" Height="240" Fill="{Binding LyricsBackdropAccent, Converter={StaticResource ArtworkColorConverter}}" Opacity="0.34" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="-58,0,0,-98" />
                             <Border Width="112" Height="112" CornerRadius="58" Background="#221F1A" BorderBrush="#F5EFE2" BorderThickness="1" HorizontalAlignment="Center" VerticalAlignment="Center">
                                 <Border Width="24" Height="24" CornerRadius="13" Background="#F5EFE2" HorizontalAlignment="Center" VerticalAlignment="Center" />
                             </Border>
@@ -83,7 +83,6 @@
                 <Grid x:Name="LyricsColumn" Grid.Column="1" RowDefinitions="Auto,*" VerticalAlignment="Stretch" Margin="0,4,0,4" MinHeight="0">
                     <StackPanel Grid.Row="0" Spacing="5" Margin="0,0,0,18">
                         <TextBlock Text="{Binding Text[LyricsEyebrow]}" Foreground="#D8C9AE" FontSize="11" FontWeight="Bold" LetterSpacing="1.8" />
-                        <TextBlock Text="{Binding Text[LyricsHeadline]}" FontSize="24" FontWeight="Bold" />
                     </StackPanel>
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled">
                         <ScrollViewer.OpacityMask>
