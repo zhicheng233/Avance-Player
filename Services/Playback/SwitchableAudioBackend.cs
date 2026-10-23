@@ -53,6 +53,7 @@ public sealed class SwitchableAudioBackend : IAudioBackend {
     public void Seek(TimeSpan position) => _active?.Seek(position);
     public void SetVolume(double volume) => _active?.SetVolume(volume);
     public void SetRate(double rate) => _active?.SetRate(rate);
+    public void SetEqualizer(EqualizerSettings settings) => _active?.SetEqualizer(settings);
 
     public PlaybackSnapshot Snapshot => _active?.Snapshot
         ?? new PlaybackSnapshot(false, TimeSpan.Zero, TimeSpan.Zero, false);

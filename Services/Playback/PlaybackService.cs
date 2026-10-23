@@ -12,6 +12,7 @@ public sealed class PlaybackService : IDisposable {
     private PlaybackSession? _session;
     private double _volume = 0.72;
     private double _rate = 1.0;
+    private EqualizerSettings _equalizer = EqualizerSettings.Flat;
     private bool _disposed;
 
     public PlaybackService(IAudioBackend backend) {
@@ -42,6 +43,7 @@ public sealed class PlaybackService : IDisposable {
         _session = result.Session;
         _backend.SetVolume(_volume);
         _backend.SetRate(_rate);
+        _backend.SetEqualizer(_equalizer);
         if (autoplay) _backend.Play();
         return result;
     }
@@ -77,6 +79,12 @@ public sealed class PlaybackService : IDisposable {
         _rate = Math.Clamp(rate, 0.25, 4.0);
         if (_disposed) return;
         _backend.SetRate(_rate);
+    }
+
+    public void SetEqualizer(EqualizerSettings settings) {
+        _equalizer = settings;
+        if (_disposed) return;
+        _backend.SetEqualizer(_equalizer);
     }
 
     private void Backend_Ended(PlaybackEnded ended) {

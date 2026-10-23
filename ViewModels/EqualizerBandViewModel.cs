@@ -4,8 +4,8 @@ using System.Runtime.CompilerServices;
 namespace Avance_Player.ViewModels;
 
 /// <summary>
-/// One display-only equalizer band. Values are presentation data for the prototype; there is no
-/// audio processing behind them yet.
+/// One normalized equalizer band control. The LibVLC backend maps the five displayed levels onto
+/// its native ten-band equalizer; the simulated demo backend ignores them because it has no audio.
 /// </summary>
 public sealed class EqualizerBandViewModel(string frequency, double level) : INotifyPropertyChanged {
     private double _level = level;

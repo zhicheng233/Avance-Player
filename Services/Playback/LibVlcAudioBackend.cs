@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using LibVLCSharp.Shared;
@@ -19,6 +20,7 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
     private string? _availabilityError;
     private double _volume = 0.72;
     private double _rate = 1.0;
+    private EqualizerSettings _equalizer = EqualizerSettings.Flat;
     private TimeSpan? _pendingStart;
     private bool _hasStarted;
     private bool _disposed;
@@ -134,6 +136,7 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
                 : null;
             player.Volume = (int)Math.Round(Math.Clamp(_volume, 0, 1) * 100);
             TrySetRate(player, (float)_rate);
+            ApplyEqualizerLocked(player);
         }
 
         oldMedia?.Dispose();
@@ -257,6 +260,14 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
         TrySetRate(player, (float)_rate);
     }
 
+    public void SetEqualizer(EqualizerSettings settings) {
+        lock (_sync) {
+            _equalizer = settings;
+            if (_disposed || _mediaPlayer is null) return;
+            ApplyEqualizerLocked(_mediaPlayer);
+        }
+    }
+
     public PlaybackSnapshot Snapshot {
         get {
             MediaPlayer? player;
@@ -310,6 +321,84 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
         catch (Exception) {
             // Rate changes are best-effort for formats that do not support them.
         }
+    }
+
+    private void ApplyEqualizerLocked(MediaPlayer player) {
+        try {
+            if (BuildEqualizer(_equalizer) is not { } equalizer) {
+                player.UnsetEqualizer();
+                return;
+            }
+
+            using (equalizer) {
+                player.SetEqualizer(equalizer);
+            }
+        }
+        catch (Exception) {
+            // The native runtime may be older than the equalizer API; playback still works.
+        }
+    }
+
+    /// <summary>
+    /// Maps the five normalized UI bands onto LibVLC's native ten bands. The UI frequencies are
+    /// interpolated on a log scale so the displayed shape is preserved instead of snapping each
+    /// native band to one of the five controls.
+    /// </summary>
+    private static Equalizer? BuildEqualizer(EqualizerSettings settings) {
+        var levels = settings.BandLevels;
+        if (levels.Count == 0) return null;
+
+        var changed = false;
+        for (var index = 0; index < levels.Count; index++) {
+            if (Math.Abs(levels[index] - 0.5) > 0.001) {
+                changed = true;
+                break;
+            }
+        }
+        if (!changed) return null;
+
+        var equalizer = new Equalizer();
+        try {
+            var bandCount = (int)equalizer.BandCount;
+            if (bandCount <= 0) {
+                equalizer.Dispose();
+                return null;
+            }
+
+            var maxBoost = 0.0;
+            for (uint band = 0; band < bandCount; band++) {
+                var frequency = equalizer.BandFrequency(band);
+                var level = LevelAt(levels, frequency);
+                var amp = Math.Clamp((level - 0.5) * 24.0, -20.0, 20.0);
+                if (amp > maxBoost) maxBoost = amp;
+                equalizer.SetAmp((float)amp, band);
+            }
+
+            // Keep a little headroom when a preset boosts any band, so the EQ does not clip.
+            equalizer.SetPreamp((float)Math.Clamp(-maxBoost, -20.0, 20.0));
+            return equalizer;
+        }
+        catch {
+            equalizer.Dispose();
+            throw;
+        }
+    }
+
+    private static double LevelAt(IReadOnlyList<double> levels, double frequency) {
+        // Matches the five labels shown in the settings panel.
+        ReadOnlySpan<double> frequencies = [31.0, 125.0, 500.0, 2000.0, 8000.0];
+        if (frequency <= frequencies[0]) return levels[0];
+        if (frequency >= frequencies[^1]) return levels[^1];
+
+        for (var index = 1; index < frequencies.Length; index++) {
+            if (frequency > frequencies[index]) continue;
+            var lower = frequencies[index - 1];
+            var upper = frequencies[index];
+            var t = (Math.Log(frequency) - Math.Log(lower)) / (Math.Log(upper) - Math.Log(lower));
+            return levels[index - 1] + (levels[index] - levels[index - 1]) * t;
+        }
+
+        return levels[^1];
     }
 
     private void MediaPlayer_Playing(object? sender, EventArgs e) => SchedulePendingStart();

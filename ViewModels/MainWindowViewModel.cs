@@ -191,6 +191,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         _ambientTimer.Start();
         _playback.SetVolume(_volume);
         _playback.SetRate(PlaybackSpeed);
+        ApplyEqualizer();
         UpdateCurrentLyric();
     }
 
@@ -399,6 +400,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             OnPropertyChanged(nameof(EqualizerMenuValue));
             SelectOption(EqualizerOptions, nextValue);
             UpdateEqualizerBands();
+            ApplyEqualizer();
             QueueStateSave();
         }
     }
@@ -1025,6 +1027,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             _ => [0.50, 0.50, 0.50, 0.50, 0.50]
         };
         for (var i = 0; i < EqualizerBands.Count; i++) EqualizerBands[i].Level = levels[i];
+    }
+
+    private void ApplyEqualizer() {
+        var levels = EqualizerBands.Select(band => band.Level).ToArray();
+        _playback.SetEqualizer(new EqualizerSettings(levels));
     }
 
     private void CyclePlaybackSpeed() {

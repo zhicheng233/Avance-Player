@@ -124,6 +124,10 @@ public sealed class SimulatedAudioBackend : IAudioBackend {
         }
     }
 
+    // Demo tracks have no audio output, so the UI equalizer stays a visual preview there.
+    public void SetEqualizer(EqualizerSettings settings) {
+    }
+
     public PlaybackSnapshot Snapshot {
         get {
             lock (_sync) {

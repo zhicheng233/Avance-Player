@@ -568,12 +568,6 @@
             <Setter Property="LetterSpacing" Value="1.4" />
             <Setter Property="Foreground" Value="#9C9587" />
         </Style>
-        <Style Selector="TextBlock.demo-badge">
-            <Setter Property="FontSize" Value="8" />
-            <Setter Property="FontWeight" Value="Bold" />
-            <Setter Property="LetterSpacing" Value="1.1" />
-            <Setter Property="Foreground" Value="#8E8678" />
-        </Style>
         <Style Selector="TextBlock.group-heading">
             <Setter Property="FontSize" Value="11" />
             <Setter Property="FontWeight" Value="SemiBold" />
@@ -1030,7 +1024,6 @@
                 <Grid ColumnDefinitions="*,Auto">
                     <StackPanel Spacing="2">
                         <TextBlock Text="{Binding Text[SettingsTitle]}" FontSize="15" FontWeight="Bold" />
-                        <TextBlock Text="{Binding Text[DemoBadge]}" Classes="demo-badge" />
                     </StackPanel>
                     <Button Grid.Column="1" Classes="console-icon" Command="{Binding ClosePopoverCommand}">
                         <controls:MediaGlyph Kind="Close" Width="12" Height="12" />
@@ -1064,7 +1057,7 @@
                 </Grid>
 
                 <Border Background="#1C1A16" CornerRadius="12" Padding="10,8">
-                    <Grid ColumnDefinitions="*,Auto">
+                    <Grid>
                         <ItemsControl ItemsSource="{Binding EqualizerBands}" VerticalAlignment="Bottom">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
@@ -1089,7 +1082,6 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                        <TextBlock Grid.Column="1" Text="{Binding Text[DemoBadge]}" Classes="demo-badge" VerticalAlignment="Bottom" />
                     </Grid>
                 </Border>
 
@@ -1256,8 +1248,6 @@
                     </Grid>
                 </Button>
 
-                <TextBlock Text="{Binding Text[DemoBadge]}" Classes="demo-badge" HorizontalAlignment="Right"
-                           Margin="8,2,8,2" />
             </StackPanel>
         </Border>
 

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 
 namespace Avance_Player.Services.Playback;
@@ -33,6 +34,15 @@ public sealed record PlaybackSnapshot(
     TimeSpan Duration,
     bool IsAtEnd);
 
+/// <summary>
+/// Five normalized UI band levels (0..1, 0.5 is flat). The LibVLC backend maps these to its
+/// native ten-band equalizer; the simulated demo backend intentionally ignores them.
+/// </summary>
+public sealed record EqualizerSettings(IReadOnlyList<double> BandLevels) {
+    public static EqualizerSettings Flat { get; } =
+        new(Array.AsReadOnly(new[] { 0.5, 0.5, 0.5, 0.5, 0.5 }));
+}
+
 public sealed record AudioLoadResult(PlaybackSession? Session, string? Error) {
     public bool Success => Session is not null;
 
@@ -55,6 +65,7 @@ public interface IAudioBackend : IDisposable {
     void Seek(TimeSpan position);
     void SetVolume(double volume);
     void SetRate(double rate);
+    void SetEqualizer(EqualizerSettings settings);
     PlaybackSnapshot Snapshot { get; }
     event Action<PlaybackEnded>? Ended;
     event Action<PlaybackFailure>? Failed;
