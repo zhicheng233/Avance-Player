@@ -118,7 +118,8 @@
                                                          Foreground="{Binding $parent[Button].Foreground}" />
                                 </Grid>
                             </Button>
-                            <TextBlock Text="{Binding LocalQualityLabel}" FontSize="10" Foreground="#B3AB9D"
+                            <TextBlock Text="{Binding LocalQualityLabel}" Width="112" TextAlignment="Right"
+                                       FontSize="10" Foreground="#B3AB9D"
                                        VerticalAlignment="Center" ToolTip.Tip="{Binding Text[QualityLabel]}" />
                             <Button Classes="mini-transport" ToolTip.Tip="{Binding Text[TooltipVolume]}" Command="{Binding ToggleMuteCommand}">
                                 <controls:VolumeGlyph Width="14" Height="13" Level="{Binding Volume}" IsMuted="{Binding IsMuted}"
