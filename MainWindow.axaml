@@ -826,7 +826,7 @@
                             <TextBlock Text="A" FontSize="25" FontWeight="Bold" Foreground="#221E18" HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
                         <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="1" Margin="10,0,0,0">
-                            <TextBlock Text="avance" FontSize="17" FontWeight="Bold" LetterSpacing="0.6" />
+                            <TextBlock Text="Avance" FontSize="17" FontWeight="Bold" LetterSpacing="0.6" />
                             <TextBlock Text="{Binding Text[BrandMotto]}" FontSize="8" Foreground="#898590" LetterSpacing="1.1" />
                         </StackPanel>
                         <Button Grid.Column="2" Classes="language-button" Content="{Binding Text.LanguageName}" ToolTip.Tip="{Binding Text[LanguageToggle]}" Command="{Binding ToggleLanguageCommand}" />
