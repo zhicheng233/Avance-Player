@@ -19,6 +19,7 @@ public sealed class LibraryPageViewModel(ObservableCollection<Music> tracks)
 public sealed class CategoryBrowsePageViewModel(string title, string subtitle, ObservableCollection<CategoryGroupViewModel> groups)
     : PageViewModel(title, subtitle) {
     public ObservableCollection<CategoryGroupViewModel> Groups { get; } = groups;
+    public bool IsEmpty => Groups.Count == 0;
 }
 
 public sealed class CategoryGroupViewModel(string title, string subtitle, string artworkColor, IReadOnlyList<Music> tracks) {

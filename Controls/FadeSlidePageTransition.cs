@@ -9,20 +9,19 @@ using Avalonia.Media.Transformation;
 namespace Avance_Player.Controls;
 
 /// <summary>
-/// Page-change motion with a little more depth than a plain cross-fade: the incoming page rises
-/// a few pixels while settling from a near-identity scale, and the outgoing page lifts away.
-/// The offsets are deliberately small so navigation still reads as immediate.
+/// 页面切换比单纯淡入淡出多一点层次：新页面从接近原尺寸的位置往上浮几个像素，
+/// 旧页面往上抬走。位移故意做得很小，不然导航会显得拖沓。
 /// </summary>
 public sealed class FadeSlidePageTransition : IPageTransition {
     public TimeSpan Duration { get; set; } = TimeSpan.FromMilliseconds(300);
 
-    /// <summary>Vertical travel of the incoming page, in pixels.</summary>
+    /// <summary>新页面从下面上来多少像素。</summary>
     public double Offset { get; set; } = 14;
 
-    /// <summary>Starting scale of the incoming page.</summary>
+    /// <summary>新页面起始缩放。</summary>
     public double ScaleFrom { get; set; } = 0.994;
 
-    /// <summary>Scale the outgoing page settles to.</summary>
+    /// <summary>旧页面退场时缩到多少。</summary>
     public double ScaleTo { get; set; } = 0.998;
 
     public Easing Easing { get; set; } = new CubicEaseOut();
@@ -38,8 +37,7 @@ public sealed class FadeSlidePageTransition : IPageTransition {
         var identity = Motion.TranslateScale(0, 0, 1);
         var start = Motion.TranslateScale(0, Offset, ScaleFrom);
 
-        // Apply the first frame before the animation clock ticks so a newly created presenter
-        // never flashes at full opacity for one compositor frame.
+        // 先把第一帧写上，别等动画时钟开始跑。不然新创建的 presenter 会有一帧全亮，闪一下。
         visual.Opacity = 0;
         visual.RenderTransform = TransformOperations.Parse(start);
 
@@ -49,8 +47,8 @@ public sealed class FadeSlidePageTransition : IPageTransition {
                 Motion.RunTransformAsync(visual, start, identity, Duration, TimeSpan.Zero, Easing, cancellationToken));
         }
         finally {
-            // Drop the now-identity transform layer; the presenter stays in the tree until the
-            // next navigation, and a permanent transform would keep text on a transformed raster path.
+            // 动画结束把已经归位的 transform 层去掉。presenter 会留到下次导航，
+            // 一直挂着 transform 会让文字走变换后的栅格路径，糊。
             if (!cancellationToken.IsCancellationRequested) visual.RenderTransform = null;
         }
     }
@@ -60,7 +58,7 @@ public sealed class FadeSlidePageTransition : IPageTransition {
         var identity = Motion.TranslateScale(0, 0, 1);
         var end = Motion.TranslateScale(0, -Offset * 0.5, ScaleTo);
 
-        // The old page leaves faster than the new one arrives, so the two never fight for focus.
+        // 旧页面走得比新页面快一点，两个就不会抢焦点。
         var duration = TimeSpan.FromMilliseconds(Duration.TotalMilliseconds * 0.6);
         try {
             await Task.WhenAll(

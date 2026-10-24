@@ -5,10 +5,12 @@ using System.Linq;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Platform;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Avance_Player.Models;
+using Avance_Player.Services.Input;
 using Avance_Player.Services.Lyrics;
 using Avance_Player.ViewModels;
 using Avance_Player.Views;
@@ -30,13 +32,46 @@ public partial class MainWindow : Window {
     private Music? _lastTappedTrack;
     private long _lastTapTimestamp;
     private long _lastRowPlaybackTimestamp;
+    private GlobalHotkeyService? _globalHotkeys;
+    private TrayIcon? _trayIcon;
+    private TrayIcons? _trayIcons;
+    private NativeMenuItem? _trayShowHideItem;
+    private NativeMenuItem? _trayPlayPauseItem;
+    private DispatcherTimer? _seekRepeatTimer;
+    private int _seekDirection;
+    private DateTime _seekStartedUtc;
+    private long _lastVolumeStepTimestamp;
+    private bool _quitRequested;
+    private bool _isClosed;
 
     public MainWindow() {
         InitializeComponent();
         _viewModel = new MainWindowViewModel();
         DataContext = _viewModel;
         _viewModel.PropertyChanged += ViewModel_PropertyChanged;
-        KeyDown += MainWindow_KeyDown;
+        _viewModel.Text.PropertyChanged += Text_PropertyChanged;
+        _viewModel.RaiseRequested += ShowFromSystemMedia;
+        _viewModel.QuitRequested += QuitFromSystemMedia;
+
+        // 用 tunnel 阶段，Space 不会先激活当前焦点按钮，方向键也不会先滚页面，
+        // 播放快捷键才抢得到。
+        AddHandler(KeyDownEvent, MainWindow_PreviewKeyDown, RoutingStrategies.Tunnel, handledEventsToo: true);
+        AddHandler(KeyUpEvent, MainWindow_PreviewKeyUp, RoutingStrategies.Tunnel, handledEventsToo: true);
+        Activated += (_, _) => {
+            if (_globalHotkeys is not null) _globalHotkeys.AppIsActive = true;
+            UpdateTrayMenu();
+        };
+        Deactivated += (_, _) => {
+            if (_globalHotkeys is not null) _globalHotkeys.AppIsActive = false;
+            StopSeekRepeat();
+        };
+
+        CreateTrayIcon();
+        Closing += MainWindow_Closing;
+        _globalHotkeys = new GlobalHotkeyService(HandleGlobalHotkey);
+        _globalHotkeys.AppIsActive = IsActive;
+        _globalHotkeys.Start();
+
         SizeChanged += (_, _) => {
             UpdateCompactLayout();
             if (_viewModel?.IsLyricsMode == true)
@@ -45,13 +80,35 @@ public partial class MainWindow : Window {
         Opened += async (_, _) => {
             UpdateCompactLayout();
             PositionWindowOnScreen();
+            UpdateTrayMenu();
             if (_viewModel is not null) await _viewModel.InitializeAsync();
         };
         Closed += (_, _) => {
+            _isClosed = true;
             _floatingLyricsWindow?.Close();
-            if (_viewModel is null) return;
-            _viewModel.PropertyChanged -= ViewModel_PropertyChanged;
-            _viewModel.Dispose();
+            StopSeekRepeat();
+            _globalHotkeys?.Dispose();
+            if (_viewModel is not null) {
+                _viewModel.PropertyChanged -= ViewModel_PropertyChanged;
+                _viewModel.Text.PropertyChanged -= Text_PropertyChanged;
+                _viewModel.RaiseRequested -= ShowFromSystemMedia;
+                _viewModel.QuitRequested -= QuitFromSystemMedia;
+                _viewModel.Dispose();
+                _viewModel = null;
+            }
+
+            try {
+                if (_trayIcons is not null && Application.Current is { } application)
+                    TrayIcon.SetIcons(application, new TrayIcons());
+                _trayIcon?.Dispose();
+            }
+            catch (Exception) {
+                // 托盘原生销毁时偶尔会撞上，忽略就行。
+            }
+            finally {
+                _trayIcon = null;
+                _trayIcons = null;
+            }
         };
     }
 
@@ -60,11 +117,15 @@ public partial class MainWindow : Window {
         _viewModel.IsCompactLayout = Bounds.Width < 1120;
     }
 
+    private void ProgressBar_SeekStarted(object? sender, EventArgs e) => _viewModel?.BeginSeek();
+
+    private void ProgressBar_SeekCompleted(object? sender, double seconds) => _viewModel?.CommitSeek(seconds);
+
     private void SongRow_Tapped(object? sender, TappedEventArgs e) {
         if (!TryGetSongRowTrack(sender, e, out var track)) return;
 
-        // Detect the second tap ourselves instead of relying on platform double-click counts.
-        // The row only has a double-click action, so a single tap is intentionally a no-op.
+        // 双击自己判，不靠平台的双击计数。
+        // 行上只有双击动作，单击本来就该什么都不做。
         var now = Stopwatch.GetTimestamp();
         if (ReferenceEquals(track, _lastTappedTrack) && now - _lastTapTimestamp <= SongRowDoubleTapTicks) {
             _lastTappedTrack = null;
@@ -95,7 +156,7 @@ public partial class MainWindow : Window {
     }
 
     private void PlaySongRow(Music track, long now) {
-        // A platform may report both Tapped and DoubleTapped for the same gesture; keep one play.
+        // 有的平台同一次手势会同时报 Tapped 和 DoubleTapped，这里只放一次播放。
         if (now - _lastRowPlaybackTimestamp < Stopwatch.Frequency / 10) return;
         _lastRowPlaybackTimestamp = now;
         _viewModel?.PlayTrackCommand.Execute(track);
@@ -143,9 +204,16 @@ public partial class MainWindow : Window {
         else if (e.PropertyName == nameof(MainWindowViewModel.IsLyricsMode) && _viewModel?.IsLyricsMode != true) {
             StopLyricScroll();
         }
-        else if (e.PropertyName == nameof(MainWindowViewModel.CurrentLyricIndex)
-                 || e.PropertyName == nameof(MainWindowViewModel.CurrentTrack)
-                 || (e.PropertyName == nameof(MainWindowViewModel.IsLyricsMode) && _viewModel?.IsLyricsMode == true)) {
+
+        if (e.PropertyName is nameof(MainWindowViewModel.IsPlaying)
+            or nameof(MainWindowViewModel.CurrentTrack)
+            or nameof(MainWindowViewModel.Volume)) {
+            UpdateTrayMenu();
+        }
+
+        if (e.PropertyName == nameof(MainWindowViewModel.CurrentLyricIndex)
+            || e.PropertyName == nameof(MainWindowViewModel.CurrentTrack)
+            || (e.PropertyName == nameof(MainWindowViewModel.IsLyricsMode) && _viewModel?.IsLyricsMode == true)) {
             Dispatcher.UIThread.Post(ScrollActiveLyric, DispatcherPriority.Background);
         }
     }
@@ -176,20 +244,306 @@ public partial class MainWindow : Window {
             area.Y + area.Height - (int)_floatingLyricsWindow.Height - 40);
     }
 
-    private void MainWindow_KeyDown(object? sender, KeyEventArgs e) {
-        if (e.Key != Key.Escape || _viewModel is null) return;
+    private void MainWindow_PreviewKeyDown(object? sender, KeyEventArgs e) {
+        if (_viewModel is null || IsTextInputFocused()) return;
+
+        var control = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+        var alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+        var meta = e.KeyModifiers.HasFlag(KeyModifiers.Meta);
+
+        if (control && alt) {
+            switch (e.Key) {
+                case Key.P:
+                    _viewModel.TogglePlaybackCommand.Execute(null);
+                    e.Handled = true;
+                    return;
+                case Key.Left:
+                    _viewModel.PreviousTrackCommand.Execute(null);
+                    e.Handled = true;
+                    return;
+                case Key.Right:
+                    _viewModel.NextTrackCommand.Execute(null);
+                    e.Handled = true;
+                    return;
+                case Key.Up:
+                    AdjustVolume(0.03);
+                    e.Handled = true;
+                    return;
+                case Key.Down:
+                    AdjustVolume(-0.03);
+                    e.Handled = true;
+                    return;
+            }
+        }
+
+        if (e.Key == Key.Space && !control && !alt && !meta) {
+            _viewModel.TogglePlaybackCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key is Key.Left or Key.Right && control && !alt && !meta) {
+            if (e.Key == Key.Left) _viewModel.PreviousTrackCommand.Execute(null);
+            else _viewModel.NextTrackCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key is Key.Left or Key.Right && !control && !alt && !meta) {
+            StartSeek(e.Key == Key.Left ? -1 : 1);
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key is Key.Up or Key.Down && !control && !alt && !meta) {
+            AdjustVolume(e.Key == Key.Up ? 0.03 : -0.03);
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == Key.Escape && HandleEscape()) e.Handled = true;
+    }
+
+    private void MainWindow_PreviewKeyUp(object? sender, KeyEventArgs e) {
+        if (e.Key is Key.Left or Key.Right) StopSeekRepeat();
+    }
+
+    private bool HandleEscape() {
+        if (_viewModel is null) return false;
         if (_viewModel.HasActivePopover) {
             _viewModel.ActivePopover = string.Empty;
-            e.Handled = true;
+            return true;
         }
-        else if (_viewModel.IsLyricsMode) {
-            _viewModel.IsLyricsMode = false;
-            if (_viewModel.IsSystemFullscreen) _viewModel.IsSystemFullscreen = false;
-            e.Handled = true;
+
+        if (_viewModel.IsLyricsMode) {
+            ImmersiveView.ExitWithAnimation();
+            return true;
         }
-        else if (_viewModel.IsSystemFullscreen) {
+
+        if (_viewModel.IsSystemFullscreen) {
             _viewModel.IsSystemFullscreen = false;
-            e.Handled = true;
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool IsTextInputFocused() {
+        var focused = FocusManager?.GetFocusedElement();
+        return focused is TextBox or ComboBox or NumericUpDown or AutoCompleteBox;
+    }
+
+    private void StartSeek(int direction) {
+        if (_viewModel is null || _seekDirection == direction) return;
+        StopSeekRepeat();
+        _seekDirection = direction;
+        _seekStartedUtc = DateTime.UtcNow;
+        SeekBy(direction * 5);
+
+        if (_seekRepeatTimer is null) {
+            _seekRepeatTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(80) };
+            _seekRepeatTimer.Tick += SeekRepeatTimer_Tick;
+        }
+        _seekRepeatTimer.Start();
+    }
+
+    private void SeekRepeatTimer_Tick(object? sender, EventArgs e) {
+        if (_viewModel is null || _seekDirection == 0) {
+            StopSeekRepeat();
+            return;
+        }
+
+        var held = DateTime.UtcNow - _seekStartedUtc;
+        var step = held.TotalMilliseconds switch {
+            < 420 => 0,
+            < 1100 => 1.5,
+            < 2200 => 3.0,
+            _ => 6.0
+        };
+        if (step > 0) SeekBy(_seekDirection * step);
+    }
+
+    private void SeekBy(double seconds) {
+        if (_viewModel is null) return;
+        _viewModel.CurrentPositionSeconds = Math.Clamp(
+            _viewModel.CurrentPositionSeconds + seconds,
+            0,
+            _viewModel.CurrentDurationSeconds);
+    }
+
+    private void StopSeekRepeat() {
+        _seekDirection = 0;
+        _seekRepeatTimer?.Stop();
+    }
+
+    private void AdjustVolume(double delta) {
+        if (_viewModel is null) return;
+        var now = Stopwatch.GetTimestamp();
+        if (now - _lastVolumeStepTimestamp < Stopwatch.Frequency / 16) return;
+        _lastVolumeStepTimestamp = now;
+        _viewModel.Volume = Math.Clamp(_viewModel.Volume + delta, 0, 1);
+    }
+
+    private void HandleGlobalHotkey(GlobalHotkeyAction action) {
+        Dispatcher.UIThread.Post(() => {
+            // hook 和激活事件在某些合成器上会抢跑。窗口已经在前台时，快捷键归 tunnel 的按键处理；
+            // 最小化或隐藏的窗口还是得走全局。
+            if (_viewModel is null || (IsActive && IsWindowShown)) return;
+            switch (action) {
+                case GlobalHotkeyAction.TogglePlayback:
+                    _viewModel.TogglePlaybackCommand.Execute(null);
+                    break;
+                case GlobalHotkeyAction.PreviousTrack:
+                    _viewModel.PreviousTrackCommand.Execute(null);
+                    break;
+                case GlobalHotkeyAction.NextTrack:
+                    _viewModel.NextTrackCommand.Execute(null);
+                    break;
+                case GlobalHotkeyAction.VolumeUp:
+                    AdjustVolume(0.03);
+                    break;
+                case GlobalHotkeyAction.VolumeDown:
+                    AdjustVolume(-0.03);
+                    break;
+            }
+        });
+    }
+
+    private void ShowFromSystemMedia() {
+        Dispatcher.UIThread.Post(ShowMainWindow);
+    }
+
+    private void ShowMainWindow() {
+        if (_isClosed) return;
+        Show();
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        Activate();
+        if (_globalHotkeys is not null) _globalHotkeys.AppIsActive = true;
+        if (_viewModel?.IsFloatingLyricsVisible == true) SyncFloatingLyricsWindow();
+        UpdateTrayMenu();
+    }
+
+    private void HideMainWindow() {
+        if (_isClosed) return;
+        StopSeekRepeat();
+        _viewModel?.SaveStateNow();
+        Hide();
+        if (_globalHotkeys is not null) _globalHotkeys.AppIsActive = false;
+        _floatingLyricsWindow?.Hide();
+        UpdateTrayMenu();
+    }
+
+    private void QuitFromSystemMedia() {
+        Dispatcher.UIThread.Post(QuitApplication);
+    }
+
+    /// <summary>
+    /// 关窗口时托盘把播放器留在后台；真要退出得走托盘或系统媒体命令。
+    /// 没有可用的托盘宿主时，关窗口还是得退出。
+    /// </summary>
+    private void MainWindow_Closing(object? sender, WindowClosingEventArgs e) {
+        if (_quitRequested || _trayIcon is null) return;
+        if (e.CloseReason is WindowCloseReason.OSShutdown or WindowCloseReason.ApplicationShutdown) return;
+        e.Cancel = true;
+        HideMainWindow();
+    }
+
+    private void QuitApplication() {
+        if (_isClosed) return;
+        _quitRequested = true;
+        Close();
+    }
+
+    private void CreateTrayIcon() {
+        if (_viewModel is null) return;
+        try {
+            var icon = new WindowIcon(AssetLoader.Open(new Uri("avares://Avance-Player/Assets/tray.png")));
+            Icon = icon;
+            _trayIcon = new TrayIcon {
+                Icon = icon,
+                ToolTipText = _viewModel.Text["TrayTooltip"],
+                IsVisible = true
+            };
+            _trayIcon.Clicked += (_, _) => ToggleWindowVisibility();
+            RebuildTrayMenu();
+            _trayIcons = new TrayIcons { _trayIcon };
+            if (Application.Current is { } application) TrayIcon.SetIcons(application, _trayIcons);
+        }
+        catch (Exception) {
+            _trayIcon?.Dispose();
+            _trayIcon = null;
+            _trayIcons = null;
+        }
+    }
+
+    private bool IsWindowShown => IsVisible && WindowState != WindowState.Minimized;
+
+    private void RebuildTrayMenu() {
+        if (_trayIcon is null || _viewModel is null) return;
+
+        try {
+            _trayShowHideItem = new NativeMenuItem {
+                Header = _viewModel.Text[IsWindowShown ? "TrayHide" : "TrayShow"],
+                Command = new RelayCommand(_ => ToggleWindowVisibility())
+            };
+            _trayPlayPauseItem = new NativeMenuItem {
+                Header = _viewModel.Text["TrayPlayPause"],
+                Command = _viewModel.TogglePlaybackCommand
+            };
+
+            var menu = new NativeMenu();
+            menu.Items.Add(_trayShowHideItem);
+            menu.Items.Add(new NativeMenuItemSeparator());
+            menu.Items.Add(_trayPlayPauseItem);
+            menu.Items.Add(new NativeMenuItem {
+                Header = _viewModel.Text["TrayPrevious"],
+                Command = _viewModel.PreviousTrackCommand
+            });
+            menu.Items.Add(new NativeMenuItem {
+                Header = _viewModel.Text["TrayNext"],
+                Command = _viewModel.NextTrackCommand
+            });
+            menu.Items.Add(new NativeMenuItemSeparator());
+            menu.Items.Add(new NativeMenuItem {
+                Header = _viewModel.Text["TrayQuit"],
+                Command = new RelayCommand(_ => QuitApplication())
+            });
+            _trayIcon.Menu = menu;
+        }
+        catch (Exception) {
+            // 运行中平台托盘宿主可能会没。
+        }
+    }
+
+    private void UpdateTrayMenu() {
+        if (_trayIcon is null || _viewModel is null) return;
+
+        try {
+            _trayIcon.ToolTipText = $"{_viewModel.Text["TrayTooltip"]} · {_viewModel.CurrentTrack.Title}";
+            if (_trayShowHideItem is not null)
+                _trayShowHideItem.Header = _viewModel.Text[IsWindowShown ? "TrayHide" : "TrayShow"];
+            if (_trayPlayPauseItem is not null)
+                _trayPlayPauseItem.Header = _viewModel.Text[_viewModel.IsPlaying ? "TrayPause" : "TrayPlay"];
+        }
+        catch (Exception) {
+            // 托盘宿主没了就忽略。
+        }
+    }
+
+    private void ToggleWindowVisibility() {
+        if (_isClosed) return;
+        if (IsVisible && WindowState != WindowState.Minimized) {
+            HideMainWindow();
+            return;
+        }
+
+        ShowMainWindow();
+    }
+
+    private void Text_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) {
+        if (e.PropertyName is "Item[]" or "Item") {
+            RebuildTrayMenu();
+            UpdateTrayMenu();
         }
     }
 
@@ -234,17 +588,16 @@ public partial class MainWindow : Window {
 
         Dispatcher.UIThread.Post(() => {
             UpdateLyricListPadding(lyricsList);
-            // The padding change invalidates layout; centring in a second background pass reads
-            // the new container positions instead of the pre-padding ones.
+            // 改 padding 会让布局失效；等第二轮后台排版再居中，读到的才是新容器位置，
+            // 不是改 padding 前的。
             Dispatcher.UIThread.Post(() => CenterActiveLyric(lyricsList, _viewModel.CurrentLyricIndex),
                 DispatcherPriority.Background);
         }, DispatcherPriority.Background);
     }
 
     /// <summary>
-    /// ScrollViewer offsets clamp at zero/max, so without padding the first and last lyric can
-    /// never reach the vertical centre. Half a viewport of space above the first item and below
-    /// the last gives every line the same centring range.
+    /// ScrollViewer 的 offset 卡在 0/max，不加 padding 的话第一行和最后一行永远到不了垂直中心。
+    /// 第一项上面、最后一项下面各留半屏，每行才有一样的居中范围。
     /// </summary>
     private static void UpdateLyricListPadding(ItemsControl lyricsList) {
         var panel = lyricsList.ItemsPanelRoot;
@@ -302,7 +655,7 @@ public partial class MainWindow : Window {
 
         var elapsed = (DateTime.UtcNow - _lyricScrollStarted).TotalMilliseconds;
         var progress = Math.Clamp(elapsed / LyricScrollDuration.TotalMilliseconds, 0, 1);
-        // Quartic ease-out: quick pick-up, then a long, soft settle on the active line.
+        // 四次方 ease-out：起步快，最后慢慢贴到当前行。
         var eased = 1 - Math.Pow(1 - progress, 4);
         var offset = _lyricScrollFrom + (_lyricScrollTo - _lyricScrollFrom) * eased;
         _lyricScrollViewer.Offset = new Vector(_lyricScrollViewer.Offset.X, offset);

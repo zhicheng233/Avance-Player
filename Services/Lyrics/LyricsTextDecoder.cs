@@ -4,9 +4,8 @@ using System.Text;
 namespace Avance_Player.Services.Lyrics;
 
 /// <summary>
-/// Decodes lyric files whose encoding is not always UTF-8. Chinese LRC/ASS files are commonly
-/// GB18030, while Japanese files may be Shift-JIS. BOMs win; otherwise strict UTF-8 is tried
-/// first, then the two legacy code pages.
+/// 读不是 UTF-8 的歌词文件。中文 LRC/ASS 常见 GB18030，日文可能是 Shift-JIS。
+/// 有 BOM 听 BOM；没有就先试严格 UTF-8，再试这两个老编码。
 /// </summary>
 public static class LyricsTextDecoder {
     static LyricsTextDecoder() {
@@ -31,15 +30,14 @@ public static class LyricsTextDecoder {
             return TrimBom(new UTF8Encoding(false, true).GetString(bytes));
         }
         catch (DecoderFallbackException) {
-            // Fall through to the legacy encodings.
+            // 不行就往下走老编码。
         }
 
         var gb18030 = TryDecode("GB18030", bytes);
         var shiftJis = TryDecode("shift_jis", bytes);
         if (gb18030 is not null && shiftJis is not null) {
-            // Both legacy code pages can accept the same bytes. Japanese text decodes to kana in
-            // Shift-JIS but to unrelated CJK ideographs in GB18030, so prefer the candidate with
-            // more kana; otherwise keep the documented GB18030 priority.
+            // 两个老编码都能吃同一串字节。日文在 Shift-JIS 里会解成假名，在 GB18030 里会变成
+            // 一堆不相干的汉字，所以假名多的优先；一样多就按文档里的 GB18030 优先。
             return TrimBom(CountKana(shiftJis) > CountKana(gb18030) ? shiftJis : gb18030);
         }
         if (gb18030 is not null) return TrimBom(gb18030);

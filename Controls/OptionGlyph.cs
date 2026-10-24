@@ -13,8 +13,8 @@ public enum OptionGlyphKind {
 }
 
 /// <summary>
-/// Small monochrome glyphs for the compact "more playback options" menu. Drawn as geometry so the
-/// icons follow the palette's foreground colour instead of relying on font symbol coverage.
+/// “更多播放选项”小菜单里的单色图标。用几何图形画，颜色跟着当前 palette 的前景色走，
+/// 不依赖字体里有没有这个符号。
 /// </summary>
 public sealed class OptionGlyph : TemplatedControl {
     public static readonly StyledProperty<OptionGlyphKind> KindProperty =
@@ -93,7 +93,7 @@ public sealed class OptionGlyph : TemplatedControl {
         }
         context.DrawGeometry(null, pen, arc);
 
-        // Arrow head at the end of the clockwise sweep, so the glyph reads as "repeat".
+        // 箭头放在顺时针扫过来的末端，看起来才像“循环”。
         var tip = PointOnCircle(center, radius, endAngle);
         var radians = endAngle * Math.PI / 180;
         var tangent = new Vector(-Math.Sin(radians), Math.Cos(radians));

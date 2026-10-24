@@ -39,6 +39,15 @@ public sealed class WaveProgressBar : Control {
     public static readonly StyledProperty<double> LoopEndProperty =
         AvaloniaProperty.Register<WaveProgressBar, double>(nameof(LoopEnd), -1);
 
+    /// <summary>
+    /// true 时按进度条用：指针移动只预览位置（写到 <see cref="Value"/>），松手才抛
+    /// <see cref="SeekCompleted"/>。seek 由 view model 在那里提交，播放时钟就不会跟拖动打架。
+    /// </summary>
+    public static readonly StyledProperty<bool> IsSeekBarProperty =
+        AvaloniaProperty.Register<WaveProgressBar, bool>(nameof(IsSeekBar));
+
+    private const double Inset = 7;
+
     private readonly DispatcherTimer _motionTimer;
     private bool _isDragging;
     private bool _isPointerOver;
@@ -58,8 +67,8 @@ public sealed class WaveProgressBar : Control {
         Focusable = true;
         Cursor = new Cursor(StandardCursorType.Hand);
 
-        // Drives the eased playback fill, the wave growing in/out of pause, and the hover thumb.
-        // It only runs while one of those is actually moving, so an idle bar costs nothing.
+        // 管播放进度的缓动、暂停时波浪收放、悬停滑块。
+        // 只有这些真的在动时才跑，静止的进度条不耗资源。
         _motionTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
         _motionTimer.Tick += (_, _) => StepMotion();
     }
@@ -114,10 +123,21 @@ public sealed class WaveProgressBar : Control {
         set => SetValue(LoopEndProperty, value);
     }
 
-    // Wave frequency in radians per pixel; ~0.18 gives a ~35px wavelength → a fine, dense ripple.
+    public bool IsSeekBar {
+        get => GetValue(IsSeekBarProperty);
+        set => SetValue(IsSeekBarProperty, value);
+    }
+
+    /// <summary>seek 拖动开始时抛一次，在预览值之前。</summary>
+    public event EventHandler? SeekStarted;
+
+    /// <summary>松手时抛，值是提交后的位置，单位跟控件一致。</summary>
+    public event EventHandler<double>? SeekCompleted;
+
+    // 波浪频率，弧度/像素。0.18 大概 35px 一个波长，波纹细一点密一点。
     private const double WaveFrequency = 0.18;
 
-    // AmbientPhase advances ~0.24 rad/s; scale it so the shorter wave still travels at ~30px/s.
+    // AmbientPhase 大约 0.24 rad/s；按这个比例缩放，短一点的波也能保持 ~30px/s 的移动速度。
     private const double WavePhaseScale = 22.0;
 
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change) {
@@ -160,7 +180,7 @@ public sealed class WaveProgressBar : Control {
             _waveAmount = IsWavy && IsPlaying ? 1 : 0;
         }
         else if (!IsPlaying && !_isDragging) {
-            // Seek/stop changes should land immediately; only continuous playback is eased.
+            // seek/停止这种变化要立刻落位，只有连续播放才做缓动。
             _displayFraction = targetFraction;
         }
 
@@ -181,12 +201,12 @@ public sealed class WaveProgressBar : Control {
             var trackPen = new Pen(track, 3, null, PenLineCap.Round);
             var accentPen = new Pen(accent, 3.5, null, PenLineCap.Round);
 
-            // Unplayed portion: flat line from thumb to right end.
+            // 未播放部分：从滑块到右端的一条平线。
             if (width - inset - progressX > 0.5) {
                 context.DrawLine(trackPen, new Point(progressX, centerY), new Point(width - inset, centerY));
             }
 
-            // A–B loop range shading and markers.
+            // A–B 循环的范围底色和标记。
             if (LoopStart >= 0 && LoopEnd > LoopStart) {
                 var startX = inset + usableWidth * Math.Clamp(LoopStart, 0, 1);
                 var endX = inset + usableWidth * Math.Clamp(LoopEnd, 0, 1);
@@ -196,7 +216,7 @@ public sealed class WaveProgressBar : Control {
                 context.DrawLine(accentPen, new Point(endX, 2), new Point(endX, height - 2));
             }
 
-            // Played portion: the wave eases down to a flat line when playback pauses.
+            // 已播放部分：暂停时波浪会慢慢收成平线。
             if (progressX - inset > 0.5) {
                 if (amplitude > 0.05) {
                     DrawSineWave(context, inset, progressX, centerY, amplitude, accentPen);
@@ -205,7 +225,7 @@ public sealed class WaveProgressBar : Control {
                 }
             }
 
-            // Thumb: rounded vertical pill at current position, with a soft halo on hover/drag.
+            // 滑块：当前位置的圆角竖条，悬停/拖动时带一圈柔光。
             if (ShowThumb) {
                 DrawThumbHalo(context, accentColor, progressX, centerY, height);
                 var thumbHalf = Math.Min(9, height / 2 - 1) * _thumbScale;
@@ -229,8 +249,10 @@ public sealed class WaveProgressBar : Control {
     }
 
     protected override void OnPointerPressed(PointerPressedEventArgs e) {
+        if (!IsEnabled) return;
         if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
         _isDragging = true;
+        if (IsSeekBar) SeekStarted?.Invoke(this, EventArgs.Empty);
         e.Pointer.Capture(this);
         SetValueFromPointer(e.GetPosition(this).X);
         EnsureMotion();
@@ -239,24 +261,38 @@ public sealed class WaveProgressBar : Control {
     }
 
     protected override void OnPointerMoved(PointerEventArgs e) {
-        if (!_isDragging) return;
+        if (!IsEnabled || !_isDragging) return;
         SetValueFromPointer(e.GetPosition(this).X);
         e.Handled = true;
     }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e) {
-        if (!_isDragging) return;
+        if (!IsEnabled || !_isDragging) return;
         _isDragging = false;
         e.Pointer.Capture(null);
         SetValueFromPointer(e.GetPosition(this).X);
+        if (IsSeekBar) SeekCompleted?.Invoke(this, Value);
         EnsureMotion();
         InvalidateVisual();
         e.Handled = true;
     }
 
+    protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e) {
+        base.OnPointerCaptureLost(e);
+        if (!_isDragging) return;
+        // 窗口移动或者别的控件抢走指针时，捕获会丢。
+        // 把当前显示的位置提交掉，别让拖动标志卡住。
+        _isDragging = false;
+        if (IsSeekBar) SeekCompleted?.Invoke(this, Value);
+        EnsureMotion();
+        InvalidateVisual();
+    }
+
     private void SetValueFromPointer(double x) {
-        if (Bounds.Width <= 0) return;
-        var fraction = Math.Clamp(x / Bounds.Width, 0, 1);
+        var width = Bounds.Width;
+        if (width <= 0) return;
+        var usableWidth = Math.Max(1, width - Inset * 2);
+        var fraction = Math.Clamp((x - Inset) / usableWidth, 0, 1);
         Value = fraction * Math.Max(1, Maximum);
         if (_isDragging) _displayFraction = fraction;
     }
@@ -286,9 +322,8 @@ public sealed class WaveProgressBar : Control {
         _thumbScale = Approach(_thumbScale, thumbTarget, deltaSeconds, 16);
         if (IsPlaying && !_isDragging) {
             var delta = fractionTarget - _displayFraction;
-            // Continuous playback only creeps forward. A backward or large forward jump is a
-            // seek, an A–B wrap, or a new track, and should land immediately instead of
-            // sweeping the fill across the bar.
+            // 连续播放只会慢慢往前爬。往回跳或者大幅往前跳，基本就是 seek、A–B 回绕、换歌，
+            // 应该直接落位，别让填充横扫过去。
             if (delta < -0.0005 || delta > 0.08) {
                 _displayFraction = fractionTarget;
             }

@@ -80,6 +80,8 @@
                         <StackPanel Spacing="2">
                             <controls:LyricLineTextBlock Line="{Binding}" FontSize="18" FontWeight="Bold" TextWrapping="Wrap"
                                                          TextAlignment="Center" Foreground="#FBF6EA"
+                                                         Position="{Binding $parent[Window].DataContext.CurrentPositionSeconds}"
+                                                         IsPlaying="{Binding $parent[Window].DataContext.IsPlaying}"
                                                          AccentBrush="{Binding $parent[Window].DataContext.Palette.Accent, Converter={StaticResource ArtworkColorConverter}}"
                                                          FutureBrush="#B9B0A0" />
                             <TextBlock Text="{Binding Translation}" IsVisible="{Binding HasTranslation}" FontSize="12"

@@ -7,8 +7,7 @@ namespace Avance_Player.Services.Lyrics;
 
 public static class LyricsNormalizer {
     /// <summary>
-    /// Sorts lines and gives each one an end time. A line that only has a start time runs until
-    /// the next line starts (the last line runs to the track duration).
+    /// 给行排序，补结束时间。只有开始时间的行一直唱到下一行开始；最后一行到整首结束。
     /// </summary>
     public static IReadOnlyList<LyricLine> Finalize(IEnumerable<LyricLine> source, TimeSpan trackDuration) {
         var lines = source
@@ -28,8 +27,8 @@ public static class LyricsNormalizer {
     }
 
     /// <summary>
-    /// QRC/YRC/LYS encode spaces as zero-duration words. Merge those into the neighbouring word
-    /// so the active-word index never lands on a gap.
+    /// QRC/YRC/LYS 用零时长的词表示空格。把这种词并到旁边的词里，
+    /// 当前词索引才不会停在空档上。
     /// </summary>
     public static IReadOnlyList<LyricWord> NormalizeWords(IEnumerable<LyricWord> source) {
         var words = new List<LyricWord>();
@@ -64,8 +63,8 @@ public static class LyricsNormalizer {
         string.Concat(words.Select(word => word.Text));
 
     /// <summary>
-    /// Gives words without an end time (enhanced LRC, some karaoke tags) the next word's start or
-    /// the line end. Rebuilds the lines because <see cref="LyricLine.Words"/> is read-only.
+    /// 没有结束时间的词（增强 LRC、部分卡拉 OK 标签）补成下一个词的开始或者行尾。
+    /// 要重建行，因为 <see cref="LyricLine.Words"/> 是只读的。
     /// </summary>
     public static IReadOnlyList<LyricLine> FillWordEnds(IEnumerable<LyricLine> source) {
         var result = new List<LyricLine>();

@@ -5,7 +5,7 @@ using Avalonia.Media;
 namespace Avance_Player.Controls;
 
 /// <summary>
-/// Crisp play/pause glyph drawn as geometry so it does not depend on font symbol coverage.
+/// 播放/暂停图标，几何绘制，不靠字体符号。
 /// </summary>
 public sealed class TransportGlyph : Control {
     public static readonly StyledProperty<bool> IsPlayingProperty =
@@ -30,7 +30,7 @@ public sealed class TransportGlyph : Control {
 
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change) {
         base.OnPropertyChanged(change);
-        // A tiny press-pop makes play/pause feel like a physical toggle instead of a glyph swap.
+        // 按下时轻轻弹一下，手感像真的开关，而不是换了个图标。
         if (change.Property == IsPlayingProperty) Motion.Pop(this, 0.82, 200);
     }
 

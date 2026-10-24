@@ -10,9 +10,8 @@ using Avance_Player.Models;
 namespace Avance_Player.Services.Lyrics;
 
 /// <summary>
-/// TTML lyrics as used by Apple Music and the AMLL TTML database. Supports word-timed
-/// &lt;span&gt; elements, line-level paragraphs, inline translation/romanization spans, Apple
-/// Music translation tables, and background-vocal spans (appended to the line for now).
+/// Apple Music 和 AMLL TTML 库用的 TTML。支持带词时间的 &lt;span&gt;、整行级段落、
+/// 行内翻译/罗马音 span、Apple 的翻译表，还有背景和声 span（现在先并到行尾）。
 /// </summary>
 public sealed class TtmlLyricsParser : ILyricsParser {
     private const string TranslationRole = "x-translation";
@@ -175,8 +174,8 @@ public sealed class TtmlLyricsParser : ILyricsParser {
 
     private static void AppendText(string text, LineBuilder builder) {
         if (text.Length == 0) return;
-        // Pretty-printed XML inserts newline+indent nodes between spans; those are formatting,
-        // not lyric whitespace. A single space between spans is meaningful and kept.
+        // 格式化过的 XML 会在 span 之间插换行和缩进，那些是排版，不是歌词空格。
+        // span 之间真正的一个空格要保留。
         if (string.IsNullOrWhiteSpace(text) && text.Contains('\n')) return;
 
         builder.Text.Append(text);

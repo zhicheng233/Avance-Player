@@ -3,15 +3,16 @@ using System;
 namespace Avance_Player.Services.Playback;
 
 /// <summary>
-/// Owns the current playback session and composes the low-level audio backend. Queue, repeat,
-/// shuffle, A–B and sleep-timer rules stay in the view model; this service only guards the
-/// session boundary and forwards backend events for the active session.
+/// 管当前播放会话，组合底层音频后端。队列、循环、随机、A–B、定时关闭的规则都在 view model；
+/// 这个服务只管会话边界，把当前会话的后端事件转出去。
 /// </summary>
 public sealed class PlaybackService : IDisposable {
     private readonly IAudioBackend _backend;
     private PlaybackSession? _session;
     private double _volume = 0.72;
     private double _rate = 1.0;
+    private double _pitchSemitones;
+    private bool _preservePitch = true;
     private EqualizerSettings _equalizer = EqualizerSettings.Flat;
     private bool _disposed;
 
@@ -23,6 +24,7 @@ public sealed class PlaybackService : IDisposable {
 
     public PlaybackSession? CurrentSession => _session;
     public bool IsLoaded => _session is not null;
+    public bool SupportsPitchShift => _backend.SupportsPitchShift;
     public PlaybackSnapshot Snapshot => _session is null
         ? new PlaybackSnapshot(false, TimeSpan.Zero, TimeSpan.Zero, false)
         : _backend.Snapshot;
@@ -33,6 +35,9 @@ public sealed class PlaybackService : IDisposable {
     public AudioLoadResult Start(AudioSource source, TimeSpan startAt, bool autoplay) {
         if (_disposed) return AudioLoadResult.Fail("The playback service has been disposed.");
 
+        // 音调/时间伸缩会改原生 runtime 选项，必须在 media 加载前应用。
+        // 后端这里只是先存着。
+        _backend.SetPitch(_pitchSemitones, _preservePitch);
         var result = _backend.Load(source, startAt);
         if (!result.Success || result.Session is null) {
             _backend.Stop();
@@ -43,6 +48,7 @@ public sealed class PlaybackService : IDisposable {
         _session = result.Session;
         _backend.SetVolume(_volume);
         _backend.SetRate(_rate);
+        _backend.SetPitch(_pitchSemitones, _preservePitch);
         _backend.SetEqualizer(_equalizer);
         if (autoplay) _backend.Play();
         return result;
@@ -79,6 +85,29 @@ public sealed class PlaybackService : IDisposable {
         _rate = Math.Clamp(rate, 0.25, 4.0);
         if (_disposed) return;
         _backend.SetRate(_rate);
+    }
+
+    /// <summary>
+    /// 应用音调同步和移调偏好。时间伸缩是原生 runtime 选项，开关时会在同一位置重载当前本地 media。
+    /// 手动移调只有后端真的支持时才重载。
+    /// </summary>
+    public void SetPitch(double semitones, bool preservePitch) {
+        var nextSemitones = Math.Clamp(semitones, -12, 12);
+        var previousSemitones = _pitchSemitones;
+        var syncChanged = _preservePitch != preservePitch;
+        var pitchChanged = Math.Abs(previousSemitones - nextSemitones) > 0.001;
+        _pitchSemitones = nextSemitones;
+        _preservePitch = preservePitch;
+        if (_disposed) return;
+
+        _backend.SetPitch(_pitchSemitones, _preservePitch);
+        if (_session is not { Source.IsLocalFile: true } session
+            || (!syncChanged && !(pitchChanged && _backend.SupportsPitchShift))) {
+            return;
+        }
+
+        var snapshot = _backend.Snapshot;
+        Start(session.Source, snapshot.Position, snapshot.IsPlaying);
     }
 
     public void SetEqualizer(EqualizerSettings settings) {

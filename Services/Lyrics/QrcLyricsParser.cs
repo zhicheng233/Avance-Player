@@ -8,8 +8,8 @@ using Avance_Player.Models;
 namespace Avance_Player.Services.Lyrics;
 
 /// <summary>
-/// QQ Music QRC lyrics (plain/decrypted form). Lines carry [start,duration] and each syllable is
-/// followed by (start,duration) in absolute milliseconds.
+/// QQ 音乐 QRC（明文/解密后的）。行是 [start,duration]，每个音节后面跟
+/// (start,duration)，绝对毫秒。
 /// </summary>
 public sealed class QrcLyricsParser : ILyricsParser {
     private static readonly Regex MetadataPattern = new(

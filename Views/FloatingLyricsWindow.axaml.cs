@@ -31,8 +31,8 @@ public partial class FloatingLyricsWindow : Window {
     }
 
     /// <summary>
-    /// The floating card is shown/hidden rather than recreated, so replay a short lift-and-fade
-    /// each time it appears. It reads as a window sliding out of the player console.
+    /// 悬浮卡片是显示/隐藏，不是重建，所以每次出现都重放一下上浮淡入。
+    /// 看起来像从播放器控制台里滑出来。
     /// </summary>
     private void PlayEntrance() {
         _entranceCts?.Cancel();
@@ -62,8 +62,7 @@ public partial class FloatingLyricsWindow : Window {
 
     protected override void OnPointerPressed(PointerPressedEventArgs e) {
         base.OnPointerPressed(e);
-        // Walk up from the hit target so presses on button content (glyphs, text) still click the
-        // button instead of starting a window drag.
+        // 从命中目标往上找，点在按钮内容（图标、文字）上也还是点按钮，不会变成拖窗口。
         if (e.Source is Visual source && source.GetSelfAndVisualAncestors().OfType<Button>().Any()) return;
         if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) BeginMoveDrag(e);
     }

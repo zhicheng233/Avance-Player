@@ -110,6 +110,7 @@
                                 </Border>
                                 <TextBlock Text="{Binding $parent[Window].DataContext.Text[LibraryHeroLine]}" FontSize="30" FontWeight="Bold" LineHeight="34" ClipToBounds="False" />
                                 <Button Classes="primary-button" Content="{Binding $parent[Window].DataContext.Text[LibraryHeroButton]}" HorizontalAlignment="Left"
+                                        IsEnabled="{Binding Tracks.Count, Converter={StaticResource CountToBoolConverter}}"
                                         Command="{Binding $parent[Window].DataContext.OpenPlayerCommand}" />
                             </StackPanel>
                             <Grid Grid.Column="1" Width="190" Height="150" HorizontalAlignment="Right" VerticalAlignment="Center">
@@ -123,14 +124,20 @@
                     </Border>
 
                     <StackPanel Spacing="13">
-                        <Grid ColumnDefinitions="*,Auto">
+                        <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding Tracks.Count, Converter={StaticResource CountToBoolConverter}}">
                             <StackPanel Spacing="4">
                                 <TextBlock Text="{Binding $parent[Window].DataContext.Text[LibraryRotationTitle]}" FontSize="21" FontWeight="Bold" />
                                 <TextBlock Text="{Binding $parent[Window].DataContext.Text[LibraryRotationSubtitle]}" FontSize="12" Foreground="#938C7E" />
                             </StackPanel>
                             <TextBlock Grid.Column="1" Text="{Binding $parent[Window].DataContext.Text[AlbumColumnHeader]}" FontSize="10" Foreground="#7C766B" VerticalAlignment="Bottom" Margin="0,0,44,2" />
                         </Grid>
-                        <ItemsControl ItemsSource="{Binding Tracks}" ItemTemplate="{StaticResource SongRowTemplate}" />
+                        <ItemsControl ItemsSource="{Binding Tracks}" ItemTemplate="{StaticResource SongRowTemplate}"
+                                      IsVisible="{Binding Tracks.Count, Converter={StaticResource CountToBoolConverter}}" />
+                        <Border IsVisible="{Binding Tracks.Count, Converter={StaticResource CountToEmptyConverter}}"
+                                Background="#1A1F1D19" CornerRadius="18" Padding="24">
+                            <TextBlock Text="{Binding $parent[Window].DataContext.Text[EmptyLibrary]}" Foreground="#A8A193"
+                                       FontSize="14" TextWrapping="Wrap" />
+                        </Border>
                     </StackPanel>
                 </StackPanel>
             </ScrollViewer>
@@ -182,6 +189,7 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                    <TextBlock Text="{Binding $parent[Window].DataContext.Text[EmptyCollection]}" Foreground="#8E8779" IsVisible="{Binding IsEmpty}" />
                 </StackPanel>
             </ScrollViewer>
         </DataTemplate>
@@ -277,9 +285,8 @@
     </Window.DataTemplates>
 
     <Window.Styles>
-        <!-- Soften hover/active colour changes across the island UI; the lyric line overrides this
-             with its own longer transitions. Transform transitions give buttons a gentle press
-             response without moving their layout box. -->
+        <!-- 整个 island 界面的悬停/选中颜色变化都放缓一点；歌词行自己覆盖成更长的 transition。
+        transform transition 给按钮一点按压反馈，又不改布局盒。 -->
         <Style Selector="Button, ToggleButton">
             <Setter Property="Transitions">
                 <Transitions>
@@ -377,7 +384,7 @@
                 </Transitions>
             </Setter>
         </Style>
-        <!-- Artwork swatches fade between tracks instead of snapping to the new colour. -->
+        <!-- 封面色块换歌时淡过去，不要直接跳。 -->
         <Style Selector="Border.artwork-fade">
             <Setter Property="Transitions">
                 <Transitions>
@@ -407,8 +414,7 @@
             <Setter Property="CornerRadius" Value="20" />
             <Setter Property="Padding" Value="16" />
             <Setter Property="BoxShadow" Value="0 18 44 0 #99000000" />
-            <!-- Panels stay in the tree so opening and closing can both fade and rise; hit-testing
-                 is enabled only by the .open class. -->
+            <!-- 面板一直留在树里，开关都能淡入淡出、往上浮；只有 .open 时才开命中测试。 -->
             <Setter Property="Opacity" Value="0" />
             <Setter Property="IsHitTestVisible" Value="False" />
             <Setter Property="RenderTransform" Value="translateY(12px) scale(0.97)" />
@@ -425,8 +431,7 @@
             <Setter Property="IsHitTestVisible" Value="True" />
             <Setter Property="RenderTransform" Value="translateY(0px) scale(1)" />
         </Style>
-        <!-- Popover scrollbars stay inside the dark island palette; the Fluent default is a light
-             track that reads as a bright stripe against the panel. -->
+        <!-- 弹层里的滚动条也压进深色 island 配色。Fluent 默认是浅色轨道，在面板上像一条亮线。 -->
         <Style Selector="Border.popover-panel ScrollBar">
             <Setter Property="Width" Value="6" />
             <Setter Property="Background" Value="Transparent" />
@@ -491,6 +496,9 @@
             <Setter Property="Background" Value="#FBF4E6" />
             <Setter Property="RenderTransform" Value="scale(1.06)" />
         </Style>
+        <Style Selector="Button.console-play:disabled">
+            <Setter Property="Opacity" Value="0.45" />
+        </Style>
         <Style Selector="Button.console-play /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="#EFE7D8" />
             <Setter Property="Foreground" Value="#1B1915" />
@@ -520,10 +528,23 @@
             <Setter Property="Foreground" Value="#1C1A16" />
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
+        <Style Selector="Slider">
+            <Setter Property="Foreground" Value="#C9B08A" />
+            <Setter Property="Background" Value="#332F29" />
+            <Setter Property="MinHeight" Value="20" />
+        </Style>
+        <Style Selector="Slider /template/ Thumb">
+            <Setter Property="Background" Value="#EFE7D8" />
+            <Setter Property="Foreground" Value="#C9B08A" />
+        </Style>
+        <Style Selector="ToggleSwitch">
+            <Setter Property="Foreground" Value="#C9B08A" />
+            <Setter Property="MinWidth" Value="0" />
+        </Style>
         <Style Selector="Button.queue-row">
             <Setter Property="Background" Value="#002E2B26" />
             <Setter Property="BorderThickness" Value="0" />
-            <!-- Stretch keeps every row the full panel width so the duration column lines up. -->
+            <!-- Stretch 让每行占满面板宽度，时长那一列才对得齐。 -->
             <Setter Property="HorizontalAlignment" Value="Stretch" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
             <Setter Property="Padding" Value="8,6" />
@@ -555,10 +576,10 @@
         <Style Selector="Button.menu-row.open">
             <Setter Property="Background" Value="#302C25" />
         </Style>
-        <!-- Option chips live in WrapPanel/UniformGrid item containers; stretch them so a grid
-             section lines its buttons up instead of left-packing content-sized chips. -->
-        <!-- Option chips live in WrapPanel/UniformGrid item containers; stretch them so a grid
-             section lines its buttons up instead of left-packing content-sized chips. -->
+        <!-- 选项 chip 放在 WrapPanel/UniformGrid 的 item 容器里；让它们拉伸，
+        网格里的按钮才会排齐，而不是按内容宽度往左挤。 -->
+        <!-- 选项 chip 放在 WrapPanel/UniformGrid 的 item 容器里；让它们拉伸，
+        网格里的按钮才会排齐，而不是按内容宽度往左挤。 -->
         <Style Selector="ItemsControl.option-grid Button.chip">
             <Setter Property="HorizontalAlignment" Value="Stretch" />
         </Style>
@@ -615,8 +636,7 @@
             <Setter Property="Background" Value="#001E1D19" />
             <Setter Property="Transitions">
                 <Transitions>
-                    <!-- Fade the highlight out slowly; a short fade-off reads as a flash when
-                         the pointer travels across several rows. -->
+                    <!-- 高亮慢慢淡出。淡得太快，指针扫过几行时会一闪一闪。 -->
                     <BrushTransition Property="Background" Duration="0:0:0.40" Easing="SineEaseInOut" />
                 </Transitions>
             </Setter>
@@ -624,8 +644,7 @@
         <Style Selector="Border.song-row:pointerover">
             <Setter Property="Background" Value="#1E1D19" />
         </Style>
-        <!-- Move only the row content on hover. Transforming the row Border itself changes its hit
-             area, which can toggle :pointerover at the edge and make the highlight flicker. -->
+        <!-- 悬停只动行内容。动行 Border 本身会改命中区域，指针在边缘来回时 :pointerover 会抖。 -->
         <Style Selector="Border.song-row > Grid.song-row-content">
             <Setter Property="RenderTransform" Value="translateX(0px)" />
             <Setter Property="Transitions">
@@ -644,7 +663,7 @@
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
         </Style>
-        <!-- Keep the Fluent button template from painting its own hover/pressed wash over the card. -->
+        <!-- 别让 Fluent 的按钮模板再往卡片上刷一层悬停/按下的底色。 -->
         <Style Selector="Button.category-card:pointerover, Button.playlist-card:pointerover">
             <Setter Property="Background" Value="Transparent" />
         </Style>
@@ -664,7 +683,7 @@
                        Button.playlist-card:pressed /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="Transparent" />
         </Style>
-        <!-- Lift the card content, not the Button, so the hover hit area stays fixed. -->
+        <!-- 抬卡片内容，不抬 Button，悬停命中区才稳。 -->
         <Style Selector="Button.category-card > Grid.card-content, Button.playlist-card > StackPanel.card-content">
             <Setter Property="RenderTransform" Value="translateY(0px) scale(1)" />
             <Setter Property="Transitions">
@@ -753,8 +772,7 @@
         <Style Selector="Button.lyric-line:pointerover">
             <Setter Property="Opacity" Value="0.82" />
         </Style>
-        <!-- Shift the lyric text inside a stationary pill; moving the Button would move its hit
-             area and can toggle :pointerover at the edge. -->
+        <!-- 只把歌词文字在固定的胶囊里挪；动 Button 的话命中区也跟着跑，边缘容易触发 :pointerover。 -->
         <Style Selector="Button.lyric-line > StackPanel.lyric-line-content">
             <Setter Property="RenderTransform" Value="translateX(0px)" />
             <Setter Property="Transitions">
@@ -772,8 +790,7 @@
             <Setter Property="Foreground" Value="#F7F1E4" />
             <Setter Property="Opacity" Value="1" />
         </Style>
-        <!-- Ambient life for the library hero: two decorative glows drift in opacity at different
-             speeds so the card never looks frozen. Kept very low-contrast on purpose. -->
+        <!-- 库首页那点氛围：两团装饰光晕用不同速度漂透明度，卡片看起来不会死板。故意压得很低对比。 -->
         <Style Selector="Ellipse.ambient-glow">
             <Style.Animations>
                 <Animation Duration="0:0:9" IterationCount="Infinite" PlaybackDirection="Alternate" Easing="SineEaseInOut">
@@ -806,7 +823,7 @@
                 <Grid RowDefinitions="Auto,Auto,Auto,*,Auto">
                     <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" Margin="3,2,1,24">
                         <Border Width="36" Height="36" CornerRadius="13" Background="{Binding Palette.Accent, Converter={StaticResource ArtworkColorConverter}}">
-                            <TextBlock Text="a" FontSize="25" FontWeight="Bold" Foreground="#221E18" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            <TextBlock Text="A" FontSize="25" FontWeight="Bold" Foreground="#221E18" HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
                         <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="1" Margin="10,0,0,0">
                             <TextBlock Text="avance" FontSize="17" FontWeight="Bold" LetterSpacing="0.6" />
@@ -850,7 +867,7 @@
                         </ItemsControl>
                     </ScrollViewer>
 
-                    <StackPanel Grid.Row="4" Spacing="11" Margin="2,14,2,90">
+                    <StackPanel Grid.Row="4" Spacing="11" Margin="{Binding StatusCardMargin}">
                         <Border Background="{Binding Palette.IslandSurface, Converter={StaticResource ArtworkColorConverter}}" CornerRadius="17" Padding="13">
                             <StackPanel Spacing="5">
                                 <TextBlock Text="{Binding Text[StatusCardTitle]}" FontSize="11" FontWeight="SemiBold" Foreground="#E4D9C6" />
@@ -871,16 +888,19 @@
             </Border>
         </Grid>
 
-        <Grid IsVisible="{Binding IsNormalMode}" VerticalAlignment="Bottom" Margin="18,0,18,10" MaxWidth="1080" HorizontalAlignment="Stretch">
+        <Grid IsVisible="{Binding IsNormalMode}" VerticalAlignment="Bottom" Margin="{Binding ConsoleMargin}" MaxWidth="1080" HorizontalAlignment="Stretch">
             <Border Classes="console-shell" VerticalAlignment="Bottom">
                 <Grid RowDefinitions="Auto,Auto" RowSpacing="6">
                     <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="14" Margin="6,0">
                         <TextBlock Grid.Column="0" Text="{Binding CurrentTimeLabel}" FontSize="10" Foreground="#9C9587" VerticalAlignment="Center" />
-                        <controls:WaveProgressBar Grid.Column="1" Height="16" VerticalAlignment="Center"
-                                                  Value="{Binding CurrentPositionSeconds, Mode=TwoWay}"
+                        <controls:WaveProgressBar Grid.Column="1" Height="20" VerticalAlignment="Center" IsSeekBar="True"
+                                                  IsEnabled="{Binding HasCurrentTrack}"
+                                                  ShowThumb="{Binding HasCurrentTrack}"
+                                                  Value="{Binding SeekPositionSeconds, Mode=TwoWay}"
                                                   Maximum="{Binding CurrentDurationSeconds}"
-                                                  Phase="{Binding AmbientPhase}" IsPlaying="{Binding IsPlaying}"
+                                                  Phase="{Binding AmbientPhase}" IsPlaying="{Binding IsTransportPlaying}"
                                                   LoopStart="{Binding AbLoopStartFraction}" LoopEnd="{Binding AbLoopEndFraction}"
+                                                  SeekStarted="ProgressBar_SeekStarted" SeekCompleted="ProgressBar_SeekCompleted"
                                                   AccentBrush="{Binding Palette.Accent, Converter={StaticResource ArtworkColorConverter}}" />
                         <TextBlock Grid.Column="2" Text="{Binding DurationLabel}" FontSize="10" Foreground="#9C9587" VerticalAlignment="Center" />
                     </Grid>
@@ -896,8 +916,9 @@
                                 <controls:MediaGlyph Kind="Previous" Width="14" Height="14"
                                                      Foreground="{Binding $parent[Button].Foreground}" />
                             </Button>
-                            <Button Classes="console-play" ToolTip.Tip="{Binding Text[TooltipPlayPause]}" Command="{Binding TogglePlaybackCommand}">
-                                <controls:TransportGlyph Width="15" Height="15" IsPlaying="{Binding IsPlaying}" Fill="#1B1915" />
+                            <Button Classes="console-play" ToolTip.Tip="{Binding Text[TooltipPlayPause]}" IsEnabled="{Binding HasCurrentTrack}"
+                                    Command="{Binding TogglePlaybackCommand}">
+                                <controls:TransportGlyph Width="15" Height="15" IsPlaying="{Binding IsTransportPlaying}" Fill="#1B1915" />
                             </Button>
                             <Button Classes="console-transport" ToolTip.Tip="{Binding Text[TooltipNext]}" Command="{Binding NextTrackCommand}">
                                 <controls:MediaGlyph Kind="Next" Width="14" Height="14"
@@ -914,31 +935,38 @@
                             </Button>
                         </StackPanel>
 
-                        <Button Grid.Column="1" Classes="now-playing-link" Background="Transparent" BorderThickness="0" Padding="0"
-                                Command="{Binding OpenPlayerCommand}" HorizontalContentAlignment="Left" VerticalAlignment="Center">
-                            <TransitioningContentControl Content="{Binding CurrentTrack}">
-                                <TransitioningContentControl.PageTransition>
-                                    <controls:FadeSlidePageTransition Duration="0:0:0.26" Offset="8" ScaleFrom="0.99" ScaleTo="0.998" />
-                                </TransitioningContentControl.PageTransition>
-                                <TransitioningContentControl.ContentTemplate>
-                                    <DataTemplate x:DataType="models:Music">
-                                        <StackPanel Orientation="Horizontal" Spacing="10">
-                                            <Border Classes="artwork-fade" Width="40" Height="40" CornerRadius="11" ClipToBounds="True"
-                                                    Background="{Binding ArtworkColor, Converter={StaticResource ArtworkColorConverter}}">
-                                                <Grid>
-                                                    <TextBlock Text="♪" FontSize="19" Foreground="#FBF7EF" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                                    <Image Source="{Binding Artwork}" Stretch="UniformToFill" />
-                                                </Grid>
-                                            </Border>
-                                            <StackPanel Spacing="2" VerticalAlignment="Center" MinWidth="150" MaxWidth="240">
-                                                <TextBlock Text="{Binding Title}" FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                                                <TextBlock Text="{Binding Artist}" FontSize="10" Foreground="#9C9587" TextTrimming="CharacterEllipsis" />
+                        <Panel Grid.Column="1" VerticalAlignment="Center">
+                            <StackPanel Spacing="2" IsVisible="{Binding !HasCurrentTrack}" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding Text[NoTrackSelected]}" FontSize="12" FontWeight="SemiBold" Foreground="#F3EFE6" />
+                                <TextBlock Text="{Binding Text[NoTrackHint]}" FontSize="10" Foreground="#9C9587" TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                            <Button Classes="now-playing-link" Background="Transparent" BorderThickness="0" Padding="0"
+                                    IsVisible="{Binding HasCurrentTrack}"
+                                    Command="{Binding OpenPlayerCommand}" HorizontalContentAlignment="Left" VerticalAlignment="Center">
+                                <TransitioningContentControl Content="{Binding CurrentTrack}">
+                                    <TransitioningContentControl.PageTransition>
+                                        <controls:FadeSlidePageTransition Duration="0:0:0.26" Offset="8" ScaleFrom="0.99" ScaleTo="0.998" />
+                                    </TransitioningContentControl.PageTransition>
+                                    <TransitioningContentControl.ContentTemplate>
+                                        <DataTemplate x:DataType="models:Music">
+                                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                                <Border Classes="artwork-fade" Width="40" Height="40" CornerRadius="11" ClipToBounds="True"
+                                                        Background="{Binding ArtworkColor, Converter={StaticResource ArtworkColorConverter}}">
+                                                    <Grid>
+                                                        <TextBlock Text="♪" FontSize="19" Foreground="#FBF7EF" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                        <Image Source="{Binding Artwork}" Stretch="UniformToFill" />
+                                                    </Grid>
+                                                </Border>
+                                                <StackPanel Spacing="2" VerticalAlignment="Center" MinWidth="150" MaxWidth="240">
+                                                    <TextBlock Text="{Binding Title}" FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                                    <TextBlock Text="{Binding Artist}" FontSize="10" Foreground="#9C9587" TextTrimming="CharacterEllipsis" />
+                                                </StackPanel>
                                             </StackPanel>
-                                        </StackPanel>
-                                    </DataTemplate>
-                                </TransitioningContentControl.ContentTemplate>
-                            </TransitioningContentControl>
-                        </Button>
+                                        </DataTemplate>
+                                    </TransitioningContentControl.ContentTemplate>
+                                </TransitioningContentControl>
+                            </Button>
+                        </Panel>
 
                         <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                             <TextBlock Text="{Binding LocalQualityLabel}" Width="112" TextAlignment="Right"
@@ -978,15 +1006,14 @@
             </Border>
         </Grid>
 
-        <!-- Popover overlay: shares the console's horizontal geometry (same margins and MaxWidth)
-             so each panel anchors to the console's right edge rather than the window edge.
-             Vertically stretched; each panel sits above the console via its bottom margin. -->
-        <Grid IsVisible="{Binding IsNormalMode}" Margin="18,0,18,16" MaxWidth="1080"
+        <!-- 弹层遮罩：跟控制台共用同一套横向几何（同样的 margin 和 MaxWidth），
+        每个面板贴控制台右边缘，而不是窗口边缘。纵向拉满，靠 bottom margin 浮在控制台上方。 -->
+        <Grid IsVisible="{Binding IsNormalMode}" Margin="{Binding PopoverMargin}" MaxWidth="1080"
               HorizontalAlignment="Stretch" IsHitTestVisible="True">
 
         <Border Classes="popover-panel" Classes.open="{Binding IsQueuePopoverOpen}" Width="330" MaxHeight="420"
                 HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,92,92">
-            <Grid RowDefinitions="Auto,*,Auto" RowSpacing="10">
+            <Grid RowDefinitions="Auto,*" RowSpacing="10">
                 <Grid ColumnDefinitions="*,Auto">
                     <StackPanel Spacing="2">
                         <TextBlock Text="{Binding Text[QueueTitle]}" FontSize="15" FontWeight="Bold" />
@@ -1015,12 +1042,12 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
                 </ScrollViewer>
-                <TextBlock Grid.Row="2" Text="{Binding Text[PreviewFooter]}" FontSize="9" Foreground="#8E8678" />
             </Grid>
         </Border>
 
-        <Border Classes="popover-panel" Classes.open="{Binding IsSoundPopoverOpen}" Width="340"
+        <Border Classes="popover-panel" Classes.open="{Binding IsSoundPopoverOpen}" Width="340" MaxHeight="560"
                 HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,54,92">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <StackPanel Spacing="14">
                 <Grid ColumnDefinitions="*,Auto">
                     <StackPanel Spacing="2">
@@ -1045,16 +1072,13 @@
                     </Grid>
                 </StackPanel>
 
-                <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto" RowSpacing="10" ColumnSpacing="12">
+                <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" RowSpacing="10" ColumnSpacing="12">
                     <TextBlock Text="{Binding Text[QualityLabel]}" Classes="eyebrow" VerticalAlignment="Center" />
-                    <TextBlock Grid.Column="1" Text="{Binding LocalQualityLabel}" FontSize="10" Foreground="#CFC6B6"
-                               HorizontalAlignment="Right" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="1" Text="{Binding LocalQualityLabel}" Width="112" FontSize="10" Foreground="#CFC6B6"
+                               HorizontalAlignment="Right" VerticalAlignment="Center" TextAlignment="Right" />
                     <TextBlock Grid.Row="1" Text="{Binding Text[EqualizerLabel]}" Classes="eyebrow" VerticalAlignment="Center" />
                     <Button Grid.Row="1" Grid.Column="1" Classes="chip" HorizontalAlignment="Right" Content="{Binding EqualizerPresetLabel}"
                             Command="{Binding CycleEqualizerCommand}" />
-                    <TextBlock Grid.Row="2" Text="{Binding Text[SpeedLabel]}" Classes="eyebrow" VerticalAlignment="Center" />
-                    <Button Grid.Row="2" Grid.Column="1" Classes="chip" HorizontalAlignment="Right" Content="{Binding PlaybackSpeedLabel}"
-                            Command="{Binding CyclePlaybackSpeedCommand}" />
                 </Grid>
 
                 <Border Background="#1C1A16" CornerRadius="12" Padding="10,8">
@@ -1086,15 +1110,43 @@
                     </Grid>
                 </Border>
 
+                <StackPanel Spacing="7">
+                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                        <TextBlock Text="{Binding Text[SpeedLabel]}" Classes="eyebrow" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1" Text="{Binding PlaybackSpeedLabel}" FontSize="10" Foreground="#CFC6B6"
+                                   HorizontalAlignment="Right" VerticalAlignment="Center" />
+                    </Grid>
+                    <Slider Minimum="0.5" Maximum="2" TickFrequency="0.05" IsSnapToTickEnabled="True"
+                            Value="{Binding PlaybackSpeed, Mode=TwoWay}" />
+                </StackPanel>
+
+                <StackPanel Spacing="7">
+                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                        <TextBlock Text="{Binding Text[PitchSyncLabel]}" Classes="eyebrow" VerticalAlignment="Center" />
+                        <ToggleSwitch Grid.Column="1" HorizontalAlignment="Right" IsChecked="{Binding IsPitchSyncEnabled, Mode=TwoWay}"
+                                      OnContent="{Binding Text[StateOn]}" OffContent="{Binding Text[StateOff]}" />
+                    </Grid>
+                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                        <TextBlock Text="{Binding Text[PitchLabel]}" Classes="eyebrow" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1" Text="{Binding PitchLabel}" FontSize="10" Foreground="#CFC6B6"
+                                   HorizontalAlignment="Right" VerticalAlignment="Center" />
+                    </Grid>
+                    <Slider Minimum="-12" Maximum="12" TickFrequency="1" IsSnapToTickEnabled="True"
+                            Value="{Binding PitchSemitones, Mode=TwoWay}" />
+                    <TextBlock Text="{Binding Text[PitchUnsupported]}" FontSize="9" Foreground="#8E8678" TextWrapping="Wrap"
+                               IsVisible="{Binding ShowPitchUnsupportedNote}" />
+                </StackPanel>
+
                 <TextBlock Text="{Binding Text[SettingsSubtitle]}" FontSize="9" Foreground="#8E8678" TextWrapping="Wrap" />
             </StackPanel>
+            </ScrollViewer>
         </Border>
 
         <Border Classes="popover-panel" Classes.open="{Binding IsMorePopoverOpen}" Width="240" MaxHeight="560"
                 Padding="8" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,16,92">
             <StackPanel Spacing="2">
 
-                <!-- Equalizer -->
+                <!-- 均衡器 -->
                 <Button Classes="menu-row" Classes.open="{Binding IsMoreEqualizerOpen}"
                         Command="{Binding ToggleMoreSectionCommand}" CommandParameter="equalizer">
                     <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="9">
@@ -1149,7 +1201,7 @@
                     </ItemsControl>
                 </StackPanel>
 
-                <!-- Playback speed -->
+                <!-- 播放速度 -->
                 <Button Classes="menu-row" Classes.open="{Binding IsMoreSpeedOpen}"
                         Command="{Binding ToggleMoreSectionCommand}" CommandParameter="speed">
                     <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="9">
@@ -1163,22 +1215,12 @@
                         </Grid>
                     </Grid>
                 </Button>
-                <ItemsControl Classes="option-grid" IsVisible="{Binding IsMoreSpeedOpen}" ItemsSource="{Binding PlaybackSpeedOptions}" Margin="23,2,0,10">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <WrapPanel Orientation="Horizontal" />
-                        </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="vm:PlaybackOptionViewModel">
-                            <Button Classes="chip" Classes.active="{Binding IsSelected}" Content="{Binding Label}"
-                                    Margin="0,0,6,6"
-                                    Command="{Binding $parent[Window].DataContext.SelectPlaybackSpeedCommand}" CommandParameter="{Binding}" />
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
+                <StackPanel IsVisible="{Binding IsMoreSpeedOpen}" Spacing="6" Margin="23,2,0,10">
+                    <Slider Minimum="0.5" Maximum="2" TickFrequency="0.05" IsSnapToTickEnabled="True"
+                            Value="{Binding PlaybackSpeed, Mode=TwoWay}" />
+                </StackPanel>
 
-                <!-- A–B loop -->
+                <!-- A–B 循环 -->
                 <Button Classes="menu-row" Classes.open="{Binding IsMoreAbLoopOpen}"
                         Command="{Binding ToggleMoreSectionCommand}" CommandParameter="abloop">
                     <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="9">
@@ -1202,7 +1244,7 @@
                     <TextBlock Text="{Binding AbLoopStatusLabel}" FontSize="9" Foreground="#9C9587" TextWrapping="Wrap" />
                 </StackPanel>
 
-                <!-- Sleep timer -->
+                <!-- 定时关闭 -->
                 <Button Classes="menu-row" Classes.open="{Binding IsMoreSleepTimerOpen}"
                         Command="{Binding ToggleMoreSectionCommand}" CommandParameter="sleep">
                     <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="9">
@@ -1233,7 +1275,7 @@
 
                 <Rectangle Classes="group-divider" />
 
-                <Button Classes="menu-row" Click="ImportLyrics_Click">
+                <Button Classes="menu-row" Click="ImportLyrics_Click" IsEnabled="{Binding HasCurrentTrack}">
                     <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
                         <controls:MediaGlyph Grid.Column="0" Kind="Lyrics" Width="14" Height="14" VerticalAlignment="Center"
                                              Foreground="#C6BDA9" />
@@ -1241,7 +1283,7 @@
                     </Grid>
                 </Button>
 
-                <Button Classes="menu-row" Command="{Binding StopCommand}">
+                <Button Classes="menu-row" Command="{Binding StopCommand}" IsEnabled="{Binding HasCurrentTrack}">
                     <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
                         <TextBlock Grid.Column="0" Text="■" FontSize="10" Foreground="#C6BDA9" VerticalAlignment="Center" Width="14"
                                    TextAlignment="Center" />
@@ -1254,6 +1296,6 @@
 
         </Grid>
 
-        <views:ImmersiveLyricsView IsVisible="{Binding IsLyricsMode}" />
+        <views:ImmersiveLyricsView x:Name="ImmersiveView" IsVisible="{Binding IsLyricsMode}" />
     </Grid>
 </Window>

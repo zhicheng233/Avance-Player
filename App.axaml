@@ -7,6 +7,8 @@
     <Application.Resources>
         <converters:ArtworkColorConverter x:Key="ArtworkColorConverter" />
         <converters:LevelHeightConverter x:Key="LevelHeightConverter" />
+        <converters:CountToBoolConverter x:Key="CountToBoolConverter" />
+        <converters:CountToBoolConverter x:Key="CountToEmptyConverter" Invert="True" />
         <Color x:Key="SystemAccentColor">#C9B08A</Color>
         <Color x:Key="SystemAccentColorDark1">#B49B77</Color>
         <Color x:Key="SystemAccentColorDark2">#9E8765</Color>

@@ -3,9 +3,8 @@ using System;
 namespace Avance_Player.Models;
 
 /// <summary>
-/// A timed word or syllable inside a lyric line. Formats that only carry line timing leave the
-/// owning <see cref="LyricLine.Words"/> collection empty; formats such as TTML, LYS, QRC, KRC,
-/// YRC, enhanced LRC, and ASS karaoke fill it so the UI can highlight the line word by word.
+/// 歌词行里的一个带时间的词或音节。只有整行时间的格式，所属 <see cref="LyricLine.Words"/> 会是空的；
+/// TTML、LYS、QRC、KRC、YRC、增强 LRC、ASS 卡拉 OK 这些会填上，UI 才能逐词高亮。
 /// </summary>
 public sealed class LyricWord(string text, TimeSpan start, TimeSpan end) {
     public string Text { get; } = text;

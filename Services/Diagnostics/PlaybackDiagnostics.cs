@@ -7,8 +7,8 @@ using LibVLCSharp.Shared;
 namespace Avance_Player.Services.Diagnostics;
 
 /// <summary>
-/// Console-only checks for local playback. This intentionally does not start Avalonia, so it can
-/// run on a headless machine or over SSH when validating a native LibVLC install.
+/// 本地播放的命令行检查。这里故意不启动 Avalonia，没桌面的机器或者 SSH 上去
+/// 也能验证原生 LibVLC 装没装好。
 /// </summary>
 public static class PlaybackDiagnostics {
     public static int Run() {

@@ -4,8 +4,8 @@ using System.Threading;
 namespace Avance_Player.Services.Persistence;
 
 /// <summary>
-/// Coalesces frequent state snapshots into one write. The store itself stays synchronous and
-/// easy to test; this class only adds scheduling and a final flush for shutdown.
+/// 把频繁的状态快照并成一次写。store 本身还是同步的，好测；
+/// 这个类只加调度和退出前的最后一次 flush。
 /// </summary>
 public sealed class DebouncedStateSaver : IDisposable {
     private static readonly TimeSpan Delay = TimeSpan.FromMilliseconds(750);
@@ -38,8 +38,7 @@ public sealed class DebouncedStateSaver : IDisposable {
             var pending = _pending;
             _pending = null;
             _timer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-            // Save while holding the scheduling lock so a timer callback cannot write an older
-            // snapshot after this newer flush.
+            // 在调度锁里写，免得定时器回调在这之后又把旧快照盖上去。
             error = pending is null ? null : SaveLocked(pending);
         }
 

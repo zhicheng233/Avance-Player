@@ -8,8 +8,8 @@ using Avance_Player.Models;
 namespace Avance_Player.Services.Lyrics;
 
 /// <summary>
-/// LYS karaoke lyrics. Each line starts with a numeric property in brackets, followed by
-/// word(start,duration) pairs where times are absolute milliseconds.
+/// LYS 卡拉 OK 歌词。每行开头是方括号里的数字属性，后面跟 word(start,duration)，
+/// 时间是绝对毫秒。
 /// </summary>
 public sealed class LysLyricsParser : ILyricsParser {
     private static readonly Regex MetadataPattern = new(

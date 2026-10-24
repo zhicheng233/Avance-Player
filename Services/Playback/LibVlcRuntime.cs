@@ -1,14 +1,15 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using LibVLCSharp.Shared;
 
 namespace Avance_Player.Services.Playback;
 
 /// <summary>
-/// Owns the native LibVLC initialization. It is lazy so a missing native library does not prevent
-/// the demo library from starting; local playback reports the initialization error instead.
+/// 管原生 LibVLC 的初始化。懒加载，原生库没装也不耽误应用起来；
+/// 本地播放失败时再报初始化错误。
 /// </summary>
 public sealed class LibVlcRuntime : IDisposable {
     private static readonly string[] DefaultOptions = ["--no-video", "--quiet"];
@@ -16,19 +17,39 @@ public sealed class LibVlcRuntime : IDisposable {
 
     private readonly object _sync = new();
     private readonly string[] _options;
+    private string[] _activeOptions;
     private LibVLC? _libVlc;
     private string? _error;
     private bool _disposed;
 
     public LibVlcRuntime(string[]? options = null) {
         _options = options ?? DefaultOptions;
+        _activeOptions = _options;
     }
 
-    public LibVLC? TryGet(out string? error) {
+    public LibVLC? TryGet(out string? error) => TryGet(_activeOptions, out error);
+
+    /// <summary>
+    /// 返回一个带 <paramref name="options"/> 的 runtime。LibVLC 的选项（比如时间伸缩）
+    /// 是整个实例的，改了就重建原生实例。调用前得把还引用旧实例的 media player dispose 掉。
+    /// </summary>
+    public LibVLC? TryGet(string[] options, out string? error) {
         lock (_sync) {
             if (_disposed) {
                 error = "The LibVLC runtime has been disposed.";
                 return null;
+            }
+
+            if (_libVlc is not null && OptionsEqual(_activeOptions, options)) {
+                error = null;
+                return _libVlc;
+            }
+
+            if (!OptionsEqual(_activeOptions, options)) {
+                _libVlc?.Dispose();
+                _libVlc = null;
+                _activeOptions = options.ToArray();
+                _error = null;
             }
 
             if (_libVlc is not null) {
@@ -42,7 +63,7 @@ public sealed class LibVlcRuntime : IDisposable {
             }
 
             try {
-                _libVlc = CreateLibVlc();
+                _libVlc = CreateLibVlc(_activeOptions);
                 _error = null;
                 error = null;
                 return _libVlc;
@@ -55,26 +76,26 @@ public sealed class LibVlcRuntime : IDisposable {
         }
     }
 
-    private LibVLC CreateLibVlc() {
-        // A bundled or custom runtime wins over the system lookup. This is useful for portable
-        // builds and for users who keep libvlc outside the normal loader path.
+    private LibVLC CreateLibVlc(string[] options) {
+        // 自带或者自定义的 runtime 优先于系统查找。便携版用得上，
+        // 也方便把 libvlc 放在常规 loader 路径之外的人。
         var customPath = Environment.GetEnvironmentVariable(RuntimePathVariable);
         if (!string.IsNullOrWhiteSpace(customPath) && TryInitialize(customPath)) {
-            return new LibVLC(_options);
+            return new LibVLC(options);
         }
 
-        // Prefer an app-local runtime before the default system lookup, so a portable build is
-        // reproducible even when a different libvlc version is installed globally.
+        // 先找应用目录里的 runtime，再走系统默认，这样就算全局装了别的 libvlc 版本，
+        // 便携版也稳定。
         var baseDirectory = AppContext.BaseDirectory;
         var architecture = RuntimeInformation.ProcessArchitecture;
         foreach (var directory in GetAppLocalDirectories(baseDirectory, architecture)) {
-            if (Directory.Exists(directory) && TryInitialize(directory)) return new LibVLC(_options);
+            if (Directory.Exists(directory) && TryInitialize(directory)) return new LibVLC(options);
         }
 
         Exception? lastError = null;
         try {
             Core.Initialize();
-            return new LibVLC(_options);
+            return new LibVLC(options);
         }
         catch (Exception exception) {
             lastError = exception;
@@ -82,7 +103,7 @@ public sealed class LibVlcRuntime : IDisposable {
 
         if (OperatingSystem.IsLinux()) {
             foreach (var directory in LinuxRuntimeDirectories) {
-                if (Directory.Exists(directory) && TryInitialize(directory)) return new LibVLC(_options);
+                if (Directory.Exists(directory) && TryInitialize(directory)) return new LibVLC(options);
             }
         }
 
@@ -137,9 +158,17 @@ public sealed class LibVlcRuntime : IDisposable {
             return true;
         }
         catch (Exception) {
-            // The caller reports the final failure from CreateLibVlc.
+            // 最终失败由调用方从 CreateLibVlc 报出去。
             return false;
         }
+    }
+
+    private static bool OptionsEqual(IReadOnlyList<string> left, IReadOnlyList<string> right) {
+        if (left.Count != right.Count) return false;
+        for (var index = 0; index < left.Count; index++) {
+            if (!string.Equals(left[index], right[index], StringComparison.Ordinal)) return false;
+        }
+        return true;
     }
 
     public void Dispose() {

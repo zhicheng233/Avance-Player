@@ -4,7 +4,7 @@ using Avalonia.Data.Converters;
 
 namespace Avance_Player.Converters;
 
-/// <summary>Maps a 0..1 equalizer level to a pixel height inside a 56 px band area.</summary>
+/// <summary>把 0..1 的均衡器档位换成 56px 带宽里的像素高度。</summary>
 public sealed class LevelHeightConverter : IValueConverter {
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) {
         var level = value is double number ? number : 0.5;

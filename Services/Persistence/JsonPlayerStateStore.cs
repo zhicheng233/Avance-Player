@@ -5,8 +5,8 @@ using System.Text.Json;
 namespace Avance_Player.Services.Persistence;
 
 /// <summary>
-/// Small JSON-backed state store. Writes go through a temporary file so a crash cannot leave a
-/// half-written state file; the previous file is kept as <c>state.json.bak</c>.
+/// 很小的 JSON 状态存储。写的时候先落临时文件，崩了也不会留下写一半的 state；
+/// 上一个文件留成 <c>state.json.bak</c>。
 /// </summary>
 public sealed class JsonPlayerStateStore : IPlayerStateStore {
     private static readonly JsonSerializerOptions JsonOptions = new() {
@@ -83,8 +83,7 @@ public sealed class JsonPlayerStateStore : IPlayerStateStore {
                         File.Copy(_path, backupPath, overwrite: true);
                     }
                     catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) {
-                        // The backup is best effort; a locked/read-only .bak must not block the
-                        // primary state write.
+                        // 备份能成就成。.bak 被占用或者只读，也不能把主状态的写挡住。
                     }
                 }
 
@@ -105,7 +104,7 @@ public sealed class JsonPlayerStateStore : IPlayerStateStore {
                         if (File.Exists(tempPath)) File.Delete(tempPath);
                     }
                     catch (Exception) {
-                        // Best effort cleanup.
+                        // 清理也一样，失败就算了。
                     }
                 }
             }

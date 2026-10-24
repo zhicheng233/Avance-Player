@@ -4,8 +4,8 @@ using System.Runtime.CompilerServices;
 namespace Avance_Player.ViewModels;
 
 /// <summary>
-/// A selectable label in a playback-settings popover. Used for sleep-timer choices and for the
-/// short option rows in the floating console, keeping the UI bilingual without a combo box.
+/// 播放设置弹层里一个可选标签。定时关闭的选项和悬浮控制台里那几行短选项都用它，
+/// UI 双语，不用 combo box。
 /// </summary>
 public sealed class PlaybackOptionViewModel(string label, int index) : INotifyPropertyChanged {
     private string _label = label;

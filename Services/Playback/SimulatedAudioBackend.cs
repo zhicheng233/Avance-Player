@@ -4,9 +4,8 @@ using System.Threading;
 namespace Avance_Player.Services.Playback;
 
 /// <summary>
-/// Clock-only backend for the demo library. It advances from a <see cref="TimeProvider"/> so the
-/// view model can keep the same queue, A–B and sleep-timer rules it already had without pretending
-/// that a demo track has real audio.
+/// 模拟播放的纯时钟后端。靠 <see cref="TimeProvider"/> 往前走，view model 原来的队列、A–B、
+/// 定时规则都不用改，也不用假装这些歌有声音。
 /// </summary>
 public sealed class SimulatedAudioBackend : IAudioBackend {
     private static readonly TimeSpan TickInterval = TimeSpan.FromMilliseconds(50);
@@ -34,11 +33,12 @@ public sealed class SimulatedAudioBackend : IAudioBackend {
 
     public bool IsAvailable => true;
     public string? AvailabilityError => null;
+    public bool SupportsPitchShift => false;
 
     public event Action<PlaybackEnded>? Ended;
 
-    // The simulated backend has no native failure path. Keep the interface contract without
-    // raising a compiler warning for an event that is intentionally never used.
+    // 模拟后端没有原生失败路径。接口里那个事件故意不用，留个空实现，
+    // 免得编译器警告。
     public event Action<PlaybackFailure>? Failed {
         add { }
         remove { }
@@ -111,8 +111,8 @@ public sealed class SimulatedAudioBackend : IAudioBackend {
     }
 
     public void SetVolume(double volume) {
-        // The demo backend has no output. Volume is still stored by PlaybackService so switching
-        // from a demo track to a local track keeps the user's chosen level.
+        // 模拟后端没有输出。音量还是存在 PlaybackService 里，从模拟源切到本地歌时
+        // 用户调好的音量还在。
     }
 
     public void SetRate(double rate) {
@@ -124,7 +124,11 @@ public sealed class SimulatedAudioBackend : IAudioBackend {
         }
     }
 
-    // Demo tracks have no audio output, so the UI equalizer stays a visual preview there.
+    // 模拟时钟没有音频输出，音调设置存着也听不见。
+    public void SetPitch(double semitones, bool preservePitch) {
+    }
+
+    // 模拟源没有输出，UI 均衡器在那里就是个预览。
     public void SetEqualizer(EqualizerSettings settings) {
     }
 

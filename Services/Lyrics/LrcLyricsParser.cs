@@ -8,9 +8,8 @@ using Avance_Player.Models;
 namespace Avance_Player.Services.Lyrics;
 
 /// <summary>
-/// Plain and enhanced LRC. Enhanced LRC embeds &lt;mm:ss.xx&gt; word timestamps; files without them
-/// stay line-level. Repeated timestamps are treated as translation lines, matching the common
-/// bilingual LRC convention.
+/// 普通 LRC 和增强 LRC。增强版在行里塞 &lt;mm:ss.xx&gt; 词时间戳；没有的就是整行级。
+/// 重复时间戳按翻译行处理，双语 LRC 一般这么写。
 /// </summary>
 public sealed class LrcLyricsParser : ILyricsParser {
     private static readonly Regex MetadataPattern = new(

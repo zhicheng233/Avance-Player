@@ -6,10 +6,9 @@ using Avalonia.Media;
 namespace Avance_Player.Controls;
 
 /// <summary>
-/// Draws the slow, blurred colour field behind the immersive lyrics view. The glow is built from
-/// several very wide radial gradients anchored near the edges, which reads as soft blurred light
-/// without requiring a shader. Blobs drift along independent sine paths so the field never loops
-/// visibly; the centre is deliberately left calmer so the lyric column keeps its contrast.
+/// 沉浸歌词背后的慢速模糊色场。光晕是几块很宽的径向渐变，贴着边缘放，
+/// 不用 shader 也有柔和的光感。色块各自按正弦轨迹漂，周期错开，看起来不会明显循环；
+/// 中间特意压暗一点，歌词那列才看得清。
 /// </summary>
 public sealed class FluidBackdrop : Control {
     public static readonly StyledProperty<IBrush?> BaseBrushProperty =
@@ -74,9 +73,8 @@ public sealed class FluidBackdrop : Control {
             var h = bounds.Height;
             var opacity = Math.Clamp(GlowOpacity, 0, 1);
 
-            // The UI palette is deliberately muted so chrome stays warm and neutral. The ambient
-            // field instead re-derives vivid tones from the same two hues: keep the hue, raise
-            // saturation and pin a mid lightness. Without that step the glow reads as grey.
+            // UI 那套颜色本来就压得比较灰，界面才显得暖、稳。这里反过来，从同两个色相里重新提亮：
+            // 色相不动，饱和度拉高，明度卡在中间。少了这步光晕会发灰。
             var accentTarget = GetColor(AccentBrush, Color.Parse("#B9A47F"));
             var secondaryTarget = GetColor(SecondaryBrush, Color.Parse("#87977F"));
             var now = DateTime.UtcNow;
@@ -87,8 +85,7 @@ public sealed class FluidBackdrop : Control {
                 _lastRenderUtc = now;
             }
             else {
-                // Ease toward the new track's palette on the ambient tick, so switching songs
-                // washes the field across instead of snapping it.
+                // 环境计时器每跳一次就往新封面的配色靠一点，切歌时是慢慢晕过去，不是啪一下换色。
                 var delta = Math.Clamp((now - _lastRenderUtc).TotalSeconds, 0, 0.2);
                 _lastRenderUtc = now;
                 var amount = 1 - Math.Exp(-3.2 * delta);
@@ -104,8 +101,8 @@ public sealed class FluidBackdrop : Control {
             var secondary = FromHsl(WrapHue(secondaryHue + 16), 0.70, 0.47);
             var depth = FromHsl(WrapHue(secondaryHue + 48), 0.66, 0.33);
 
-            // Corner-anchored field: vibrant at the edges, calmer through the middle where the
-            // lyric column sits. Radii are generous so the blobs merge into a single gradient mesh.
+            // 色块都挂在四角：边缘艳一点，中间歌词那列的位置压平。
+            // 半径给得很大，几块光才能糊成一片。
             Blob(context, highlight, opacity * 0.95,
                 w * (-0.26 + Math.Sin(phase * 0.51) * 0.05),
                 h * (-0.30 + Math.Cos(phase * 0.43) * 0.05), w * 0.92, h * 1.00);
@@ -122,7 +119,7 @@ public sealed class FluidBackdrop : Control {
                 w * (0.34 + Math.Sin(phase * 0.33 + 2.0) * 0.07),
                 h * (0.48 + Math.Cos(phase * 0.47 + 1.5) * 0.06), w * 1.00, h * 1.04);
 
-            // Vignette: keeps a soft dark frame so the glow reads as light rather than flat fill.
+            // 暗角。加一圈很淡的暗边，光看起来才像光，不然就是一块平涂。
             var vignette = new RadialGradientBrush {
                 Center = new RelativePoint(0.5, 0.5, RelativeUnit.Relative),
                 GradientOrigin = new RelativePoint(0.5, 0.5, RelativeUnit.Relative),
@@ -135,9 +132,8 @@ public sealed class FluidBackdrop : Control {
             };
             context.DrawRectangle(vignette, null, bounds);
 
-            // Contrast scrim behind the lyric column only. A wide, very soft horizontal gradient
-            // keeps the ambient glow visible on both sides without letting the brightest blob
-            // reduce lyric legibility; it fades out well before the album art.
+            // 只在歌词列后面加一层对比遮罩。横向渐变拉得很宽很软，两边光还看得到，
+            // 但最亮的那块不会把字压没；到专辑封面之前就已经淡完了。
             var scrim = new LinearGradientBrush {
                 StartPoint = new RelativePoint(0.40, 0, RelativeUnit.Relative),
                 EndPoint = new RelativePoint(0.86, 0, RelativeUnit.Relative),
@@ -153,16 +149,15 @@ public sealed class FluidBackdrop : Control {
     }
 
     /// <summary>
-    /// Paints one soft blob. <paramref name="x"/>/<paramref name="y"/> are the top-left of the
-    /// ellipse; the gradient fades from the centre outwards so overlapping blobs blend into a mesh.
+    /// 画一块软光斑。<paramref name="x"/>/<paramref name="y"/> 是椭圆左上角，
+    /// 渐变从中心往外淡，叠在一起就像一团雾。
     /// </summary>
     private static void Blob(DrawingContext context, Color color, double opacity,
         double x, double y, double width, double height) {
         if (opacity <= 0) return;
         byte Alpha(double value) => (byte)Math.Clamp(Math.Round(255 * opacity * value), 0, 255);
-        // RadiusX/Y are relative to the ellipse's bounding box *width*, so 0.5 makes the
-        // gradient reach zero exactly at the ellipse boundary. A larger value would leave a
-        // visible arc where the clipped ellipse cuts a still-opaque gradient.
+        // RadiusX/Y 是相对椭圆外接框宽度的，所以 0.5 正好在椭圆边上降到 0。
+        // 给大了会在裁切边缘留下一圈还实着的渐变弧。
         var brush = new RadialGradientBrush {
             Center = new RelativePoint(0.5, 0.5, RelativeUnit.Relative),
             GradientOrigin = new RelativePoint(0.5, 0.5, RelativeUnit.Relative),

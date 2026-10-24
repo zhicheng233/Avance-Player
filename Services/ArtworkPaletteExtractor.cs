@@ -8,9 +8,8 @@ using Avalonia.Platform;
 namespace Avance_Player.Services;
 
 /// <summary>
-/// A small set of cover-derived colours. <see cref="DominantColor"/> is the average of the
-/// strongest hue cluster and is suitable for the muted UI palette; the accent colours are
-/// slightly more vivid so the immersive fluid field reads as light from the artwork.
+/// 一小撮从封面取的颜色。<see cref="DominantColor"/> 是最强色簇的平均，适合压暗的 UI；
+/// 强调色稍微鲜一点，沉浸歌词的光场才像从封面里透出来的。
 /// </summary>
 public sealed record ArtworkPalette(
     string DominantColor,
@@ -19,9 +18,8 @@ public sealed record ArtworkPalette(
     string BackgroundColor);
 
 /// <summary>
-/// Extracts a stable colour palette from album artwork by sampling a downscaled copy. This is
-/// deliberately a histogram of hue clusters rather than a single average: averaging a cover with
-/// a large dark background and a small bright subject usually produces a muddy grey.
+/// 采样缩小后的封面，取一套稳定的配色。这里故意用色簇直方图，不是简单平均：
+/// 大片暗底加一小块亮主体的封面，一平均基本就是一团灰。
 /// </summary>
 public static class ArtworkPaletteExtractor {
     private const int SampleSize = 64;
@@ -52,8 +50,7 @@ public static class ArtworkPaletteExtractor {
             return BuildPalette(bins);
         }
         catch (Exception) {
-            // Artwork is optional. A failed sample should fall back to the path-derived swatch
-            // instead of making an import fail.
+            // 封面不是必须的。采样失败就退回按路径生成的色块，别让导入跟着失败。
             return null;
         }
         finally {
@@ -111,8 +108,7 @@ public static class ArtworkPaletteExtractor {
 
         if (strongest is null) return null;
 
-        // Prefer a genuinely different hue for the secondary blob. If the cover is nearly
-        // monochrome, derive a companion hue so the field still has depth.
+        // 第二团光尽量换个色相。封面接近单色时，补一个搭得上的色相，光场才有层次。
         HueBin? companion = null;
         for (var index = 0; index < bins.Length; index++) {
             var bin = bins[index];
@@ -133,9 +129,8 @@ public static class ArtworkPaletteExtractor {
                 Clamp(companion.AverageSaturation * 1.30, 0.46, 0.80),
                 Clamp(companion.AverageLightness, 0.40, 0.60));
 
-        // A dark tint of the strongest cover hue anchors the whole fluid field. It stays dark
-        // enough for the lyric column while removing the warm neutral wash that made the page
-        // read as unrelated to the artwork.
+        // 用最强色相的深色打底，把整个流体场压住。够暗，歌词看得清；
+        // 又不会留下那层暖灰，让页面跟封面完全没关系。
         var background = FromHsl(strongest.CenterHue,
             Clamp(strongest.AverageSaturation * 0.34, 0.10, 0.26),
             0.10);
@@ -214,7 +209,7 @@ public static class ArtworkPaletteExtractor {
             ToChannelByte(_sumGreen / Count),
             ToChannelByte(_sumBlue / Count));
 
-        // Area matters most; saturation only breaks ties between similarly sized clusters.
+        // 面积最重要；饱和度只在色簇大小差不多时用来分胜负。
         public double Weight => Count * (0.35 + AverageSaturation * 0.65);
 
         public void Add(byte red, byte green, byte blue, double saturation, double lightness) {

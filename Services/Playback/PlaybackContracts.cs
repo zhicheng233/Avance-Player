@@ -5,8 +5,7 @@ using System.Threading;
 namespace Avance_Player.Services.Playback;
 
 /// <summary>
-/// A playable source. Demo tracks use relative paths and are handled by the simulated backend;
-/// imported files use absolute paths and are handled by LibVLC.
+/// 可播放源。老的 demo 源是相对路径，走模拟后端；导入的文件是绝对路径，走 LibVLC。
 /// </summary>
 public sealed record AudioSource(string FilePath, TimeSpan Duration, bool IsLocalFile);
 
@@ -35,8 +34,8 @@ public sealed record PlaybackSnapshot(
     bool IsAtEnd);
 
 /// <summary>
-/// Five normalized UI band levels (0..1, 0.5 is flat). The LibVLC backend maps these to its
-/// native ten-band equalizer; the simulated demo backend intentionally ignores them.
+/// 五个归一化的 UI 频段（0..1，0.5 是平直）。LibVLC 后端映射到原生十段；
+/// 模拟后端故意不管。
 /// </summary>
 public sealed record EqualizerSettings(IReadOnlyList<double> BandLevels) {
     public static EqualizerSettings Flat { get; } =
@@ -51,13 +50,16 @@ public sealed record AudioLoadResult(PlaybackSession? Session, string? Error) {
 }
 
 /// <summary>
-/// Low-level audio I/O. Implementations are composed by <see cref="PlaybackService"/>; this
-/// interface is deliberately small so the demo clock and LibVLC can be swapped without a
-/// backend class hierarchy.
+/// 底层音频 I/O。由 <see cref="PlaybackService"/> 组合；接口故意做小，
+/// 模拟时钟和 LibVLC 能直接换，不用搞后端继承树。
 /// </summary>
 public interface IAudioBackend : IDisposable {
     bool IsAvailable { get; }
     string? AvailabilityError { get; }
+
+    /// <summary>后端能不能在变速之外单独移调。</summary>
+    bool SupportsPitchShift { get; }
+
     AudioLoadResult Load(AudioSource source, TimeSpan startAt = default);
     void Play();
     void Pause();
@@ -65,6 +67,7 @@ public interface IAudioBackend : IDisposable {
     void Seek(TimeSpan position);
     void SetVolume(double volume);
     void SetRate(double rate);
+    void SetPitch(double semitones, bool preservePitch);
     void SetEqualizer(EqualizerSettings settings);
     PlaybackSnapshot Snapshot { get; }
     event Action<PlaybackEnded>? Ended;

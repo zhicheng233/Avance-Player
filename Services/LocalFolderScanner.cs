@@ -21,9 +21,8 @@ public sealed record LocalFolderScanResult(
     IReadOnlyList<string> Warnings);
 
 /// <summary>
-/// Scans a folder tree for playable audio files and pairs each one with the usual sidecars:
-/// a cover image and a lyric file in the same folder. Metadata and embedded artwork come from
-/// TagLib#; this service does not decode or play audio.
+/// 递归扫文件夹里的音频，顺便配同目录的封面和歌词。标签和内嵌封面走 TagLib#；
+/// 这个服务不解码也不放声音。
 /// </summary>
 public sealed class LocalFolderScanner {
     private static readonly HashSet<string> AudioExtensions = new(StringComparer.OrdinalIgnoreCase) {
@@ -34,8 +33,7 @@ public sealed class LocalFolderScanner {
     private static readonly string[] CoverExtensions = [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"];
     private static readonly string[] CoverPriority = ["cover", "folder", "front", "album", "artwork"];
 
-    // Fallback swatch for files without readable cover art. Tracks with artwork use the sampled
-    // dominant cover colour instead, so the palette follows the album image.
+    // 没有可读封面时的兜底色块。有封面的歌用采样出来的主色，palette 会跟着专辑图走。
     private static readonly string[] ArtworkColors = [
         "#5F7F72", "#3F7A86", "#B3785A", "#B66F6B", "#A88E5E", "#5C8471", "#4B7B84", "#7C6A8A"
     ];
@@ -92,9 +90,8 @@ public sealed class LocalFolderScanner {
     }
 
     /// <summary>
-    /// Loads a known set of paths, preserving the requested order. This is used when restoring a
-    /// persisted library; unlike <see cref="ScanAsync"/> it does not recursively enumerate the
-    /// folder, so unrelated files added since the last run are not imported implicitly.
+    /// 按给定顺序加载已知路径。恢复曲库时用；跟 <see cref="ScanAsync"/> 不一样，
+    /// 它不会递归枚举目录，上次运行之后新加的文件不会被顺手导进来。
     /// </summary>
     public async Task<LocalFolderScanResult> LoadTracksAsync(
         IReadOnlyList<string> paths,
@@ -115,7 +112,7 @@ public sealed class LocalFolderScanner {
             catch (Exception exception) when (exception is ArgumentException
                                                   or NotSupportedException
                                                   or PathTooLongException) {
-                // Ignore malformed persisted paths instead of failing the whole restore.
+                // 存坏的路径直接跳过，别让整个恢复失败。
             }
         }
 
@@ -173,7 +170,7 @@ public sealed class LocalFolderScanner {
             RecurseSubdirectories = true,
             IgnoreInaccessible = true,
             ReturnSpecialDirectories = false,
-            // Skip symlinked folders so a link cycle cannot make the scan run forever.
+            // 跳过符号链接目录，免得链接成环，扫描跑不完。
             AttributesToSkip = FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReparsePoint
         };
 
@@ -220,25 +217,27 @@ public sealed class LocalFolderScanner {
 
             var coverPath = FindCoverPath(directory, coverPathCache);
             var artwork = coverPath is null ? null : LoadBitmap(coverPath, coverBitmapCache);
+            // 同目录封面真的解码成功才把路径报出去。不然坏封面会把内嵌图挡住，
+            // 系统媒体控制那边就没图了。
+            var artworkPath = artwork is not null ? coverPath : null;
             if (artwork is null) artwork = LoadEmbeddedArtwork(tagFile);
 
             ArtworkPalette? coverPalette = null;
             if (artwork is not null) {
-                if (coverPath is null) {
+                if (artworkPath is null) {
                     coverPalette = ArtworkPaletteExtractor.Extract(artwork);
                 }
-                else if (!coverPaletteCache.TryGetValue(coverPath, out coverPalette)) {
+                else if (!coverPaletteCache.TryGetValue(artworkPath, out coverPalette)) {
                     coverPalette = ArtworkPaletteExtractor.Extract(artwork);
-                    coverPaletteCache[coverPath] = coverPalette;
+                    coverPaletteCache[artworkPath] = coverPalette;
                 }
             }
 
             var (lyrics, lyricsPath) = await TryLoadSameBaseLyricsAsync(path, duration, warnings, cancellationToken)
                 .ConfigureAwait(false);
 
-            // One-song folders often name the lyric file after the album ("lyrics.lrc") instead of
-            // the track. Only use that fallback when the folder has a single audio file, so we
-            // never attach another song's words to this one.
+            // 只有一首歌的文件夹，歌词经常按专辑名起（"lyrics.lrc"），不跟歌名走。
+            // 只有单个音频文件时才用这个兜底，免得把别人的词挂上来。
             if (lyrics is null && siblingAudioCount == 1) {
                 (lyrics, lyricsPath) = await TryLoadLooseLyricsAsync(directory, duration, warnings, cancellationToken)
                     .ConfigureAwait(false);
@@ -254,7 +253,7 @@ public sealed class LocalFolderScanner {
                 FilePath = path,
                 BitrateKbps = bitrate,
                 Artwork = artwork,
-                ArtworkPath = coverPath,
+                ArtworkPath = artworkPath,
                 ArtworkAccentColor = coverPalette?.AccentColor,
                 ArtworkSecondaryColor = coverPalette?.SecondaryColor,
                 ArtworkBackgroundColor = coverPalette?.BackgroundColor
@@ -287,7 +286,7 @@ public sealed class LocalFolderScanner {
     }
 
     private static string PickArtworkColor(string path) {
-        // FNV-1a gives a stable colour across processes, unlike string.GetHashCode.
+        // FNV-1a 跨进程稳定，string.GetHashCode 不是。
         var hash = 2166136261u;
         foreach (var character in path) {
             hash ^= character;

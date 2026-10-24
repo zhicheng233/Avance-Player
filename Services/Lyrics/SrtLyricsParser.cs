@@ -8,8 +8,8 @@ using Avance_Player.Models;
 namespace Avance_Player.Services.Lyrics;
 
 /// <summary>
-/// SubRip subtitles. SRT has no word timing, so each subtitle block becomes one line-level lyric.
-/// Markup is stripped and multi-line blocks are joined into a single lyric row.
+/// SubRip 字幕。SRT 没有逐词时间，每个字幕块就是一行整行级歌词。
+/// 标签会剥掉，多行块并成一行。
 /// </summary>
 public sealed class SrtLyricsParser : ILyricsParser {
     private static readonly Regex TimingPattern = new(

@@ -7,9 +7,8 @@ using LibVLCSharp.Shared;
 namespace Avance_Player.Services.Playback;
 
 /// <summary>
-/// LibVLC-backed audio output for imported local files. The class composes a
-/// <see cref="LibVlcRuntime"/> and a <see cref="MediaPlayer"/> instead of deriving from a backend
-/// base class.
+/// 本地文件的 LibVLC 音频输出。这个类组合一个 <see cref="LibVlcRuntime"/> 和一个
+/// <see cref="MediaPlayer"/>，没有从后端基类继承。
 /// </summary>
 public sealed class LibVlcAudioBackend : IAudioBackend {
     private readonly object _sync = new();
@@ -20,6 +19,9 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
     private string? _availabilityError;
     private double _volume = 0.72;
     private double _rate = 1.0;
+    private double _pitchSemitones;
+    private bool _preservePitch = true;
+    private string[]? _appliedRuntimeOptions;
     private EqualizerSettings _equalizer = EqualizerSettings.Flat;
     private TimeSpan? _pendingStart;
     private bool _hasStarted;
@@ -46,6 +48,10 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
         }
     }
 
+    // libvlc 3 的公开 API 里没有音频滤镜链，所以本地文件没法手动移调。
+    // 时间伸缩（音调同步）是支持的。
+    public bool SupportsPitchShift => false;
+
     public event Action<PlaybackEnded>? Ended;
     public event Action<PlaybackFailure>? Failed;
 
@@ -66,13 +72,45 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
             return AudioLoadResult.Fail($"File not found: {fullPath}");
         }
 
+        string[] runtimeOptions;
+        MediaPlayer? oldPlayer = null;
+        Media? oldMediaToDispose = null;
+        lock (_sync) {
+            if (_disposed) return AudioLoadResult.Fail("The local audio backend has been disposed.");
+
+            runtimeOptions = BuildRuntimeOptions();
+            if (_mediaPlayer is not null && !RuntimeOptionsEqual(_appliedRuntimeOptions, runtimeOptions)) {
+                // 时间伸缩变了就得重建原生 LibVLC 实例。先把旧 player 摘掉，
+                // runtime 才能安全地 dispose 掉旧的 LibVLC。
+                oldPlayer = _mediaPlayer;
+                oldMediaToDispose = _media;
+                _mediaPlayer = null;
+                _media = null;
+                _hasStarted = false;
+                _pendingStart = null;
+            }
+        }
+
+        if (oldPlayer is not null) {
+            try {
+                oldPlayer.Stop();
+            }
+            catch (Exception) {
+                // 已经停了或者还没开始的 player 这里可能抛异常。
+            }
+
+            oldPlayer.Dispose();
+        }
+
+        oldMediaToDispose?.Dispose();
+
         MediaPlayer? player;
         LibVLC? libVlc;
         string? runtimeError;
         lock (_sync) {
             if (_disposed) return AudioLoadResult.Fail("The local audio backend has been disposed.");
 
-            libVlc = _runtime.TryGet(out runtimeError);
+            libVlc = _runtime.TryGet(runtimeOptions, out runtimeError);
             if (libVlc is null) {
                 _availabilityError = runtimeError;
                 return AudioLoadResult.Fail(runtimeError ?? "LibVLC is unavailable.");
@@ -86,17 +124,18 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
                 return AudioLoadResult.Fail(exception.Message);
             }
 
-            // Suppress a delayed end event from the track being replaced before Stop runs.
+            _appliedRuntimeOptions = runtimeOptions;
+            // 压掉被换掉的那首歌延迟发来的结束事件，等 Stop 跑完再说。
             _hasStarted = false;
         }
 
         try {
-            // Stop is synchronous. Keep it outside _sync so a callback arriving from a VLC thread
-            // can still take the lock instead of deadlocking with Stop.
+            // Stop 是同步的。放在 _sync 外面，VLC 线程回调过来时还能拿锁，
+            // 不会跟 Stop 死锁。
             player.Stop();
         }
         catch (Exception) {
-            // A stopped or not-yet-started player may throw here; loading the new media is still safe.
+            // 已经停了或者还没开始的 player 这里可能抛；新 media 还是照样能加载。
         }
 
         Media media;
@@ -190,7 +229,7 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
             player.SetPause(true);
         }
         catch (Exception) {
-            // Pausing a stopped player is harmless.
+            // 暂停一个已经停了的 player 没事。
         }
     }
 
@@ -207,7 +246,7 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
             player.Stop();
         }
         catch (Exception) {
-            // Stopping an already stopped player is harmless.
+            // 停一个已经停了的 player 也没事。
         }
     }
 
@@ -229,7 +268,7 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
             player.Time = (long)clamped.TotalMilliseconds;
         }
         catch (Exception) {
-            // Some formats do not support seeking; keep the current position.
+            // 有些格式不支持 seek，那就留在当前位置。
         }
     }
 
@@ -245,7 +284,7 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
             player.Volume = (int)Math.Round(_volume * 100);
         }
         catch (Exception) {
-            // The player may not have a media loaded yet.
+            // player 可能还没挂 media。
         }
     }
 
@@ -258,6 +297,34 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
         }
 
         TrySetRate(player, (float)_rate);
+    }
+
+    public void SetPitch(double semitones, bool preservePitch) {
+        lock (_sync) {
+            // 留着，万一以后的原生运行时能移调，还用同一个接口。
+            _pitchSemitones = Math.Clamp(semitones, -12, 12);
+            _preservePitch = preservePitch;
+        }
+    }
+
+    private string[] BuildRuntimeOptions() {
+        var options = new List<string> { "--no-video", "--quiet" };
+        if (!_preservePitch) {
+            // LibVLC 默认对变速做时间伸缩。关掉之后变速会跟着变调，就是唱机那种调速手感。
+            options.Add("--no-audio-time-stretch");
+        }
+
+        // libvlc 3 没有音频滤镜/移调 API，所以半音偏移只是存着，等以后有后端能应用；
+        // 不会当成 media 选项传进去（传了也会被静默忽略）。
+        return options.ToArray();
+    }
+
+    private static bool RuntimeOptionsEqual(IReadOnlyList<string>? left, IReadOnlyList<string> right) {
+        if (left is null || left.Count != right.Count) return false;
+        for (var index = 0; index < left.Count; index++) {
+            if (!string.Equals(left[index], right[index], StringComparison.Ordinal)) return false;
+        }
+        return true;
     }
 
     public void SetEqualizer(EqualizerSettings settings) {
@@ -291,8 +358,7 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
                 var state = player.State;
                 var atEnd = state == VLCState.Ended
                             || (duration > TimeSpan.Zero && position >= duration - TimeSpan.FromMilliseconds(50));
-                // IsPlaying can briefly lag the native state while a newly loaded track starts.
-                // Treat the Playing state as authoritative too.
+                // 刚换歌开始播的时候 IsPlaying 可能比原生状态慢半拍。Playing 状态也算数。
                 var isPlaying = player.IsPlaying || state == VLCState.Playing;
                 return new PlaybackSnapshot(isPlaying, position, duration, atEnd);
             }
@@ -319,7 +385,7 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
             player.SetRate(rate);
         }
         catch (Exception) {
-            // Rate changes are best-effort for formats that do not support them.
+            // 不支持变速的格式，能变多少算多少。
         }
     }
 
@@ -335,14 +401,13 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
             }
         }
         catch (Exception) {
-            // The native runtime may be older than the equalizer API; playback still works.
+            // 原生运行时可能比均衡器 API 老；播放还是能用的。
         }
     }
 
     /// <summary>
-    /// Maps the five normalized UI bands onto LibVLC's native ten bands. The UI frequencies are
-    /// interpolated on a log scale so the displayed shape is preserved instead of snapping each
-    /// native band to one of the five controls.
+    /// 把 UI 上五个归一化频段映射到 LibVLC 原生十段。UI 频率按对数插值，
+    /// 显示出来的形状能保住，不会把每个原生段硬塞到五个控制里的某一个。
     /// </summary>
     private static Equalizer? BuildEqualizer(EqualizerSettings settings) {
         var levels = settings.BandLevels;
@@ -365,17 +430,25 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
                 return null;
             }
 
-            var maxBoost = 0.0;
+            // 曲线以 0 dB 为中心，不再给最响的频段压一个负 preamp。
+            // 之前一加负 preamp，非 Flat 预设就明显比 Flat 小声。
+            var amps = new double[bandCount];
+            var sum = 0.0;
             for (uint band = 0; band < bandCount; band++) {
                 var frequency = equalizer.BandFrequency(band);
                 var level = LevelAt(levels, frequency);
-                var amp = Math.Clamp((level - 0.5) * 24.0, -20.0, 20.0);
-                if (amp > maxBoost) maxBoost = amp;
-                equalizer.SetAmp((float)amp, band);
+                var amp = Math.Clamp((level - 0.5) * 20.0, -12.0, 6.0);
+                amps[band] = amp;
+                sum += amp;
             }
 
-            // Keep a little headroom when a preset boosts any band, so the EQ does not clip.
-            equalizer.SetPreamp((float)Math.Clamp(-maxBoost, -20.0, 20.0));
+            var average = sum / bandCount;
+            for (uint band = 0; band < bandCount; band++) {
+                var compensated = Math.Clamp(amps[band] - average, -12.0, 6.0);
+                equalizer.SetAmp((float)compensated, band);
+            }
+
+            equalizer.SetPreamp(0);
             return equalizer;
         }
         catch {
@@ -385,7 +458,7 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
     }
 
     private static double LevelAt(IReadOnlyList<double> levels, double frequency) {
-        // Matches the five labels shown in the settings panel.
+        // 跟设置面板里五个标签对上。
         ReadOnlySpan<double> frequencies = [31.0, 125.0, 500.0, 2000.0, 8000.0];
         if (frequency <= frequencies[0]) return levels[0];
         if (frequency >= frequencies[^1]) return levels[^1];
@@ -404,7 +477,7 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
     private void MediaPlayer_Playing(object? sender, EventArgs e) => SchedulePendingStart();
 
     private void MediaPlayer_TimeChanged(object? sender, MediaPlayerTimeChangedEventArgs e) {
-        // Playing is the fast path; TimeChanged is a fallback for outputs that do not raise it.
+        // Playing 是快路径；TimeChanged 是给不抛 Playing 的输出的兜底。
         if (e.Time > 0) SchedulePendingStart();
     }
 
@@ -422,8 +495,8 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
 
         if (pending is not { } position || player is null) return;
 
-        // Never seek from inside a LibVLC event callback: some outputs can deadlock or park the
-        // clock. Let the callback return, then apply the position on the thread pool.
+        // 别在 LibVLC 事件回调里 seek：有些输出会死锁或者把时钟卡住。
+        // 让回调先返回，再到线程池里应用位置。
         _ = Task.Run(async () => {
             await Task.Delay(30).ConfigureAwait(false);
             lock (_sync) {
@@ -434,13 +507,13 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
                 var targetMs = Math.Max(0, position.TotalMilliseconds);
                 var lengthMs = player.Length;
                 if (lengthMs > 0 && targetMs >= lengthMs) {
-                    // TagLib's duration can be longer than LibVLC's; do not seek past the real end.
+                    // TagLib 的时长可能比 LibVLC 的长；别 seek 过真正的结尾。
                     targetMs = Math.Max(0, lengthMs - 500);
                 }
                 player.Time = (long)targetMs;
             }
             catch (Exception) {
-                // Some formats do not support seeking; the track will start from zero.
+                // 有些格式不支持 seek，那首歌就从 0 开始。
             }
         });
     }
@@ -450,9 +523,8 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
         lock (_sync) {
             if (_disposed || !_hasStarted || _session is null || _mediaPlayer is null) return;
 
-            // A delayed EndReached from the previous media can arrive after a new track starts.
-            // Requiring the Ended state (or a position at the very end) avoids treating that stale
-            // event as the new track's end.
+            // 上一首延迟的 EndReached 可能在新歌开始之后才到。
+            // 要求状态是 Ended（或者位置确实在最后），免得把旧事件当成新歌结束。
             var state = _mediaPlayer.State;
             if (state != VLCState.Ended) {
                 var length = _mediaPlayer.Length;
@@ -507,7 +579,7 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
             player?.Stop();
         }
         catch (Exception) {
-            // Ignore shutdown races.
+            // 关停时的竞态，忽略。
         }
 
         media?.Dispose();

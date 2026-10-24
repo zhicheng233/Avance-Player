@@ -8,8 +8,7 @@ using Avance_Player.Models;
 namespace Avance_Player.Services.Lyrics;
 
 /// <summary>
-/// NetEase Cloud Music YRC lyrics. Lines carry [start,duration] and each syllable is preceded by
-/// (start,duration,0) in absolute milliseconds.
+/// 网易云 YRC。行是 [start,duration]，每个音节前面是 (start,duration,0)，绝对毫秒。
 /// </summary>
 public sealed class YrcLyricsParser : ILyricsParser {
     private static readonly Regex MetadataPattern = new(
@@ -41,7 +40,7 @@ public sealed class YrcLyricsParser : ILyricsParser {
         foreach (var rawLine in content.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n')) {
             var line = rawLine.Trim();
             if (line.Length == 0) continue;
-            if (line.StartsWith('{')) continue; // YRC JSON metadata header
+            if (line.StartsWith('{')) continue; // YRC 的 JSON 元信息头
 
             var metadata = MetadataPattern.Match(line);
             if (metadata.Success) {

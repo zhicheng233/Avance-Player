@@ -3,9 +3,8 @@ using System;
 namespace Avance_Player.Services.Playback;
 
 /// <summary>
-/// Routes each source to the real or simulated backend. This is composition rather than a
-/// backend inheritance hierarchy: the router owns both implementations and delegates the small
-/// <see cref="IAudioBackend"/> surface.
+/// 按源把播放分到真实或模拟后端。这是组合，不是后端继承：
+/// 路由自己拿着两个实现，把很小的 <see cref="IAudioBackend"/> 接口转发出去。
 /// </summary>
 public sealed class SwitchableAudioBackend : IAudioBackend {
     private readonly LibVlcAudioBackend _local;
@@ -24,6 +23,7 @@ public sealed class SwitchableAudioBackend : IAudioBackend {
 
     public bool IsAvailable => true;
     public string? AvailabilityError => _local.AvailabilityError;
+    public bool SupportsPitchShift => _local.SupportsPitchShift;
 
     public event Action<PlaybackEnded>? Ended;
     public event Action<PlaybackFailure>? Failed;
@@ -33,8 +33,8 @@ public sealed class SwitchableAudioBackend : IAudioBackend {
 
         if (source.IsLocalFile) {
             _simulated.Stop();
-            // Stop the previous local track even if this load fails (missing file, native runtime
-            // unavailable); otherwise the old audio would keep playing with no active session.
+            // 这次加载失败了（文件没了、原生运行时不可用）也要把上一首本地歌停掉；
+            // 不然旧音频还在响，会话却已经没了。
             _local.Stop();
             var result = _local.Load(source, startAt);
             _active = result.Success ? _local : null;
@@ -53,6 +53,13 @@ public sealed class SwitchableAudioBackend : IAudioBackend {
     public void Seek(TimeSpan position) => _active?.Seek(position);
     public void SetVolume(double volume) => _active?.SetVolume(volume);
     public void SetRate(double rate) => _active?.SetRate(rate);
+
+    public void SetPitch(double semitones, bool preservePitch) {
+        // 两个后端都存一份偏好，切源的时候不会丢。
+        _local.SetPitch(semitones, preservePitch);
+        _simulated.SetPitch(semitones, preservePitch);
+    }
+
     public void SetEqualizer(EqualizerSettings settings) => _active?.SetEqualizer(settings);
 
     public PlaybackSnapshot Snapshot => _active?.Snapshot

@@ -6,8 +6,7 @@ using Avalonia.Media;
 namespace Avance_Player.Controls;
 
 /// <summary>
-/// Monochrome speaker glyph. Drawn rather than composed from emoji so the icon keeps the
-/// interface's foreground colour on every platform.
+/// 单色喇叭图标。自己画，不用 emoji，这样各个平台都能跟着界面前景色走。
 /// </summary>
 public sealed class VolumeGlyph : TemplatedControl {
     public static readonly StyledProperty<double> LevelProperty =

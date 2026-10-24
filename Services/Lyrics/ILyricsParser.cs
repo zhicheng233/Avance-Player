@@ -13,7 +13,7 @@ public sealed class LyricsParseException(string message) : Exception(message);
 public interface ILyricsParser {
     LyricsFormat Format { get; }
 
-    /// <summary>Sniffs content when the extension is missing or ambiguous.</summary>
+    /// <summary>扩展名缺失或者拿不准时，靠内容嗅探。</summary>
     bool CanParse(string content);
 
     LyricsDocument Parse(string content, LyricsParseContext context);

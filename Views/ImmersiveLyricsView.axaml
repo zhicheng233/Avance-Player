@@ -16,7 +16,7 @@
 
         <Grid Margin="34,26,34,24" RowDefinitions="Auto,*,Auto" RowSpacing="20">
             <Grid x:Name="TopBar" Grid.Row="0" ColumnDefinitions="*,Auto">
-                <Button Classes="island-button" Command="{Binding ExitLyricsCommand}">
+                <Button Classes="island-button" Click="BackToLibrary_Click">
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <TextBlock Text="←" />
                         <TextBlock Text="{Binding Text[BackToLibrary]}" />
@@ -46,14 +46,10 @@
                     </StackPanel>
                 </StackPanel>
 
-                <Grid x:Name="LyricsColumn" Grid.Column="1" RowDefinitions="Auto,*" VerticalAlignment="Stretch" Margin="0,4,0,4" MinHeight="0">
-                    <StackPanel Grid.Row="0" Spacing="5" Margin="0,0,0,18">
-                        <TextBlock Text="{Binding Text[LyricsEyebrow]}" Foreground="#D8C9AE" FontSize="11" FontWeight="Bold" LetterSpacing="1.8" />
-                    </StackPanel>
-                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled">
+                <Grid x:Name="LyricsColumn" Grid.Column="1" RowDefinitions="*" VerticalAlignment="Stretch" Margin="0,4,0,4" MinHeight="0">
+                    <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled">
                         <ScrollViewer.OpacityMask>
-                            <!-- Lines fade out at both ends instead of being sliced by the viewport
-                                 edge, matching the way streaming lyric views hand off between lines. -->
+                            <!-- 两端歌词淡出，而不是被视口边缘硬切，跟流媒体歌词视图换行时的处理差不多。 -->
                             <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
                                 <GradientStop Offset="0" Color="#00000000" />
                                 <GradientStop Offset="0.07" Color="#FF000000" />
@@ -69,6 +65,8 @@
                                             Command="{Binding $parent[UserControl].DataContext.SeekToLyricCommand}" CommandParameter="{Binding}">
                                         <StackPanel Classes="lyric-line-content" Spacing="4">
                                             <controls:LyricLineTextBlock Line="{Binding}" TextWrapping="Wrap"
+                                                                         Position="{Binding $parent[UserControl].DataContext.CurrentPositionSeconds}"
+                                                                         IsPlaying="{Binding $parent[UserControl].DataContext.IsPlaying}"
                                                                          AccentBrush="{Binding $parent[UserControl].DataContext.Palette.Accent, Converter={StaticResource ArtworkColorConverter}}"
                                                                          FutureBrush="#8F887B" />
                                             <TextBlock Text="{Binding Translation}" IsVisible="{Binding HasTranslation}" FontSize="15" FontWeight="Medium" Foreground="#C0B8A9" TextWrapping="Wrap" />
@@ -79,7 +77,7 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
                     </ScrollViewer>
-                    <TextBlock Grid.Row="1" Text="{Binding Text[NoLyrics]}" Foreground="#B5AD9F" FontSize="17" VerticalAlignment="Center" IsVisible="{Binding NoLyricsAvailable}" />
+                    <TextBlock Grid.Row="0" Text="{Binding Text[NoLyrics]}" Foreground="#B5AD9F" FontSize="17" VerticalAlignment="Center" IsVisible="{Binding NoLyricsAvailable}" />
                 </Grid>
             </Grid>
 

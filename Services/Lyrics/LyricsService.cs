@@ -8,8 +8,8 @@ using Avance_Player.Models;
 namespace Avance_Player.Services.Lyrics;
 
 /// <summary>
-/// File-system side of lyric loading. Parsing is synchronous and small; the only async work is
-/// reading the file so the UI thread is not blocked by slow network/removable drives.
+/// 歌词加载里跟文件系统打交道的那部分。解析本身同步而且不大；唯一异步的是读文件，
+/// 免得慢的网络盘/移动盘把 UI 线程卡住。
 /// </summary>
 public sealed class LyricsService {
     public static readonly IReadOnlyList<string> SupportedExtensions = [
@@ -41,8 +41,7 @@ public sealed class LyricsService {
     }
 
     /// <summary>
-    /// Looks for a sidecar with the same base name as the audio file. Word-level formats win over
-    /// line-level ones so a TTML file is preferred to an LRC next to it.
+    /// 找跟音频同名的 sidecar。逐词格式优先于整行级，所以旁边同时有 TTML 和 LRC 时选 TTML。
     /// </summary>
     public async Task<LyricsDocument?> TryLoadSidecarAsync(
         string? audioPath,
@@ -62,8 +61,8 @@ public sealed class LyricsService {
 
         if (string.IsNullOrWhiteSpace(directory) || string.IsNullOrWhiteSpace(baseName)) return null;
 
-        // Match sidecars case-insensitively: a folder copied from Windows may contain "Song.LRC"
-        // while the audio file is "Song.flac", and Linux would otherwise miss it.
+        // sidecar 匹配不区分大小写：Windows 拷过来的文件夹里可能是 "Song.LRC"，
+        // 音频叫 "Song.flac"，Linux 上不这么比就找不着。
         var files = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         try {
             foreach (var file in Directory.EnumerateFiles(directory)) files.TryAdd(Path.GetFileName(file), file);

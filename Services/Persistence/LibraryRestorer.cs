@@ -14,8 +14,8 @@ public sealed record RestoredLibrary(
     IReadOnlyList<string> MissingPaths);
 
 /// <summary>
-/// Rebuilds the path-based library and playlist state by re-reading metadata, artwork and lyrics.
-/// Demo paths are mapped to the built-in tracks; absolute paths go through the folder scanner.
+/// 按保存的绝对路径重新读标签、封面和歌词，把曲库和歌单状态搭回来。
+/// 老版本留下的相对 demo 路径直接忽略。
 /// </summary>
 public sealed class LibraryRestorer {
     private readonly LocalFolderScanner _scanner;
@@ -67,7 +67,8 @@ public sealed class LibraryRestorer {
             }
 
             if (!absolute) {
-                missing.Add(path);
+                // 老版本会塞相对 demo 路径。这些歌已经不在曲库里了，悄悄跳过，
+                // 别报一堆文件丢失。
                 continue;
             }
 
@@ -93,9 +94,8 @@ public sealed class LibraryRestorer {
     }
 
     /// <summary>
-    /// Reapplies lyric files that were chosen manually from outside the audio folder. Sidecar
-    /// files are already handled by the scanner; this layer only needs to restore explicit paths.
-    /// A missing or unreadable lyric file is ignored so the rest of the library still restores.
+    /// 把用户从音频目录外手动选的歌词文件重新挂上。sidecar 扫描器已经管了；
+    /// 这层只管显式路径。歌词文件丢了或者读不了就跳过，别影响整个曲库恢复。
     /// </summary>
     private async Task ApplySavedLyricsAsync(
         PlayerState state,
@@ -128,10 +128,10 @@ public sealed class LibraryRestorer {
                 throw;
             }
             catch (LyricsParseException) {
-                // Keep any sidecar lyrics the scanner already attached.
+                // 扫描器已经挂上的 sidecar 歌词留着。
             }
             catch (Exception) {
-                // An unreadable manual file should not fail the whole restore.
+                // 手动歌词读不了不能把整个恢复搞失败。
             }
         }
     }

@@ -22,16 +22,15 @@ public enum MediaGlyphKind {
 }
 
 /// <summary>
-/// Monochrome transport and row-action glyphs (skip, play, shuffle, repeat, queue, more, lyrics,
-/// plus/minus, close, fullscreen) drawn as geometry.
-/// The immersive lyrics bar and the floating console previously used text symbols such as "|◀"
-/// whose font metrics sit off-centre; geometry keeps every icon on the button's optical centre.
+/// 单色播放控制/行内操作图标（上一首、播放、随机、循环、队列、更多、歌词、加减、关闭、全屏），
+/// 全用几何图形画。以前沉浸歌词栏和悬浮控制台用的是 "|◀" 这种字符，字体度量偏得厉害；
+/// 几何图形能保证每个图标都在按钮的视觉中心。
 /// </summary>
 public sealed class MediaGlyph : TemplatedControl {
     public static readonly StyledProperty<MediaGlyphKind> KindProperty =
         AvaloniaProperty.Register<MediaGlyph, MediaGlyphKind>(nameof(Kind));
 
-    /// <summary>For <see cref="MediaGlyphKind.Shuffle"/>, true draws crossing arrows (shuffle on).</summary>
+    /// <summary><see cref="MediaGlyphKind.Shuffle"/> 用：true 画交叉箭头，表示随机开着。</summary>
     public static readonly StyledProperty<bool> IsActiveProperty =
         AvaloniaProperty.Register<MediaGlyph, bool>(nameof(IsActive));
 
@@ -51,7 +50,7 @@ public sealed class MediaGlyph : TemplatedControl {
 
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change) {
         base.OnPropertyChanged(change);
-        // Shuffle and repeat toggle their shape; a small pop ties the new glyph to the click.
+        // 随机和循环会换形状，顺手给个小弹跳，让图标和点击对得上。
         if (change.Property == IsActiveProperty) Motion.Pop(this, 0.86, 180);
     }
 
@@ -136,7 +135,7 @@ public sealed class MediaGlyph : TemplatedControl {
 
     private static void DrawShuffle(DrawingContext context, IBrush brush, Pen pen, Point center, double size, bool crossing) {
         if (!crossing) {
-            // Sequential: two straight arrows pointing in opposite directions.
+            // 顺序播放：两个反向的直箭头。
             context.DrawLine(pen, At(center, size, -0.34, -0.22), At(center, size, 0.26, -0.22));
             DrawArrowHead(context, brush, At(center, size, 0.38, -0.22), 1, size);
             context.DrawLine(pen, At(center, size, 0.34, 0.22), At(center, size, -0.26, 0.22));
@@ -144,7 +143,7 @@ public sealed class MediaGlyph : TemplatedControl {
             return;
         }
 
-        // Shuffle: the two paths cross in the middle.
+        // 随机：两条路径在中间交叉。
         DrawShufflePath(context, pen, center, size, -0.22, 0.22);
         DrawShufflePath(context, pen, center, size, 0.22, -0.22);
         DrawArrowHead(context, brush, At(center, size, 0.38, 0.22), 1, size);
@@ -203,7 +202,7 @@ public sealed class MediaGlyph : TemplatedControl {
 
         if (!one) return;
 
-        // Small "1" inside the loop for repeat-one.
+        // 循环单个的时候，圈里加个小 "1"。
         var top = At(center, size, 0.02, -0.17);
         context.DrawLine(pen, top, At(center, size, 0.02, 0.18));
         context.DrawLine(pen, top, At(center, size, -0.07, -0.06));
@@ -238,7 +237,7 @@ public sealed class MediaGlyph : TemplatedControl {
     }
 
     private static void DrawPlay(DrawingContext context, IBrush brush, Point center, double size) {
-        // Slightly right of the geometric centre so the triangle's visual mass sits centred.
+        // 稍微往几何中心右边挪一点，三角形的视觉重量才看着居中。
         var triangle = new StreamGeometry();
         using (var builder = triangle.Open()) {
             builder.BeginFigure(At(center, size, -0.22, -0.36), true);

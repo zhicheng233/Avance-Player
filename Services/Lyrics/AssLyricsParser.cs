@@ -8,9 +8,8 @@ using Avance_Player.Models;
 namespace Avance_Player.Services.Lyrics;
 
 /// <summary>
-/// Advanced SubStation Alpha karaoke. ASS timing is carried by \k / \kf / \ko tags in
-/// centiseconds; files without karaoke tags remain line-level. Separate translation/romaji
-/// dialogue lines are paired with the main line when their start times match.
+/// Advanced SubStation Alpha 卡拉 OK。ASS 的时间在 \k / \kf / \ko 标签里，单位是厘秒；
+/// 没有这些标签就是整行级。翻译/罗马音如果是单独一条 dialogue，开始时间对得上就配到主行。
 /// </summary>
 public sealed class AssLyricsParser : ILyricsParser {
     private static readonly Regex OverrideBlockPattern = new(@"\{(?<content>[^}]*)\}", RegexOptions.Compiled);
@@ -149,7 +148,7 @@ public sealed class AssLyricsParser : ILyricsParser {
                 continue;
             }
 
-            // A common bilingual ASS uses two unlabeled styles, one Chinese and one Latin.
+            // 常见的双语 ASS 会用两个没名字的样式，一个中文一个拉丁。
             if (mains.Count == 2) {
                 var first = mains[0];
                 var second = mains[1];

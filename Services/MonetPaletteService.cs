@@ -14,10 +14,9 @@ public sealed record MonetPalette(
     string MutedForeground);
 
 /// <summary>
-/// Builds an image-inspired palette from the demo artwork color seed. Replace the seed with
-/// sampled bitmap colors when real cover images are introduced; this class does not inspect pixels.
-/// The transform deliberately keeps surfaces warm and neutral, and moves violet hues toward amber
-/// so a single purple cover does not tint the whole interface.
+/// 从封面主色的种子生成一套像图里来的配色。以后接了真实封面采样，就把种子换掉；
+/// 这个类本身不看像素。变换刻意让界面暖、稳，还会把紫色往琥珀色推，
+/// 免得一张紫色封面把整个界面染紫。
 /// </summary>
 public static class MonetPaletteService {
     private static readonly Dictionary<string, MonetPalette> Cache = new(StringComparer.OrdinalIgnoreCase);

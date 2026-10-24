@@ -12,9 +12,8 @@ using Avance_Player.Models;
 namespace Avance_Player.Services.Lyrics;
 
 /// <summary>
-/// Kugou KRC karaoke lyrics. KRC files are commonly a base64 or binary payload: four magic bytes
-/// followed by an XOR-obfuscated zlib stream. Word offsets in the decoded text are relative to
-/// the line start. The optional [language:...] JSON blob supplies translations/romanization.
+/// 酷狗 KRC。文件常见是 base64 或二进制：4 个 magic byte，后面跟 XOR 过的 zlib 流。
+/// 解出来的词偏移是相对行首的。可选的 [language:...] JSON 里有翻译/罗马音。
 /// </summary>
 public sealed class KrcLyricsParser : ILyricsParser {
     private static readonly byte[] XorKey = [
@@ -41,7 +40,7 @@ public sealed class KrcLyricsParser : ILyricsParser {
     public LyricsDocument Parse(string content, LyricsParseContext context) =>
         ParseText(DecodeKrc(Encoding.UTF8.GetBytes(content)), context);
 
-    /// <summary>Used by the registry so binary KRC files are decrypted before text decoding.</summary>
+    /// <summary>给注册表用的：二进制 KRC 要先解密，再做文本解码。</summary>
     public LyricsDocument ParseBytes(byte[] bytes, LyricsParseContext context) =>
         ParseText(DecodeKrc(bytes), context);
 
@@ -179,7 +178,7 @@ public sealed class KrcLyricsParser : ILyricsParser {
             }
         }
         catch (Exception) {
-            // Translation metadata is optional; keep the lyric lines if it is malformed.
+            // 翻译元信息是可选的，格式坏了就只留歌词行。
         }
     }
 
@@ -191,7 +190,7 @@ public sealed class KrcLyricsParser : ILyricsParser {
             payload = bytes[4..];
         }
         else {
-            // Hand-edited/exported KRC files are plain text, sometimes with a UTF-8 BOM.
+            // 手改过/导出的 KRC 就是纯文本，有时候带 UTF-8 BOM。
             var decodedText = LyricsTextDecoder.Decode(bytes);
             if (decodedText.TrimStart('\uFEFF', ' ', '\t', '\r', '\n').StartsWith('['))
                 return decodedText;

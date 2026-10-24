@@ -17,7 +17,7 @@ public sealed class LyricLine(
 
     public TimeSpan Timestamp { get; } = timestamp;
 
-    /// <summary>End of the line. Parsers fill this from the format, the next line, or track length.</summary>
+    /// <summary>这一行结束的时间。解析器按格式、下一行或者整首时长来填。</summary>
     public TimeSpan End { get; set; } = end ?? timestamp;
 
     public string Text { get; } = text;
@@ -26,7 +26,7 @@ public sealed class LyricLine(
     public bool HasTranslation => !string.IsNullOrWhiteSpace(Translation);
     public bool HasRomanization => !string.IsNullOrWhiteSpace(Romanization);
 
-    /// <summary>Timed words/syllables. Empty for line-level formats.</summary>
+    /// <summary>带时间的词/音节。整行级格式这里是空的。</summary>
     public IReadOnlyList<LyricWord> Words { get; } = words ?? [];
     public bool HasWordTiming => Words.Count > 0;
 
@@ -40,8 +40,8 @@ public sealed class LyricLine(
     }
 
     /// <summary>
-    /// Index of the word being sung, or -1 before the first word. Updated by the player; the lyric
-    /// renderer listens for this property instead of rebuilding the visual tree on every tick.
+    /// 当前唱到第几个词，第一个词之前是 -1。播放器更新；
+    /// 歌词渲染器监听这个属性，不用每 100ms 重建视觉树。
     /// </summary>
     public int CurrentWordIndex {
         get => _currentWordIndex;

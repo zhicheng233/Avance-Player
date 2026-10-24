@@ -16,9 +16,8 @@ public enum LyricsFormat {
 }
 
 /// <summary>
-/// Parsed lyrics plus the metadata that came with the file. The player only needs
-/// <see cref="Lines"/>; the remaining fields are kept so the UI can describe what was loaded and
-/// future settings can expose title/artist/offset information.
+/// 解析后的歌词和文件里带的元信息。播放器其实只用 <see cref="Lines"/>；
+/// 其余字段留着，UI 可以说明加载了什么，以后设置里也能拿标题/歌手/偏移。
 /// </summary>
 public sealed class LyricsDocument {
     public required LyricsFormat Format { get; init; }

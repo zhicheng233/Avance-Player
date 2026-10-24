@@ -5,7 +5,6 @@ using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Avance_Player.Models;
@@ -13,6 +12,8 @@ using Avance_Player.Services;
 using Avance_Player.Services.Lyrics;
 using Avance_Player.Services.Persistence;
 using Avance_Player.Services.Playback;
+using Avance_Player.Services.SystemMedia;
+using Avalonia;
 using Avalonia.Threading;
 
 namespace Avance_Player.ViewModels;
@@ -24,11 +25,13 @@ public enum RepeatMode {
 }
 
 public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
+    private const double MinimumPlaybackSpeed = 0.5;
+    private const double MaximumPlaybackSpeed = 2.0;
     private static readonly int[] SleepTimerMinuteValues = [0, 15, 30, 45, 60, 90];
-    private static readonly double[] PlaybackSpeedValues = [0.75, 1.0, 1.25, 1.5, 2.0];
 
     private readonly DispatcherTimer _playbackTimer;
     private readonly DispatcherTimer _ambientTimer;
+    private readonly DispatcherTimer _pitchApplyTimer;
     private readonly Random _random = new();
     private readonly Stack<Music> _shuffleHistory = new();
     private readonly HashSet<Music> _shufflePlayed = [];
@@ -38,6 +41,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     private readonly LyricsService _lyricsService;
     private readonly LocalFolderScanner _folderScanner;
     private double _currentPositionSeconds;
+    private double _seekPositionSeconds;
+    private double? _pendingSeekTargetSeconds;
+    private DateTime _pendingSeekUntilUtc;
+    private bool _isSeeking;
     private bool _isPlaying;
     private bool _isRestoringState;
     private bool _suppressSeek;
@@ -48,6 +55,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     private string _statusKey = "StatusIdle";
     private object[] _statusArguments = [];
     private double _ambientPhase;
+    private readonly Music _emptyTrack;
     private Music _currentTrack;
     private ObservableCollection<Music> _playbackQueue;
     private Playlist? _selectedPlaylist;
@@ -62,7 +70,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     private double _volume = 0.72;
     private double _lastNonZeroVolume = 0.72;
     private int _equalizerPresetIndex;
-    private int _playbackSpeedIndex = 1;
+    private double _playbackSpeed = 1.0;
+    private bool _isPitchSyncEnabled = true;
+    private double _pitchSemitones;
+    private bool _systemMediaCleared;
     private int _sleepTimerSelectionIndex;
     private DateTime? _sleepDeadlineUtc;
     private int _lastSleepRemainingSecond = -1;
@@ -86,26 +97,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         _playback.Ended += Playback_Ended;
         _playback.Failed += Playback_Failed;
         _stateSaver.SaveFailed += StateSaver_SaveFailed;
+        _services.SystemMedia.CommandReceived += SystemMedia_CommandReceived;
 
-        Tracks = CreateDemoTracks();
-        // Demo-only: built-in tracks use the simulated clock, so two get evenly distributed word
-        // timings to exercise the word-by-word renderer before a real lyric file is imported.
-        if (Tracks.Count > 0) Tracks[0].Lyrics = AddDemoWordTimings(Tracks[0].Lyrics, Tracks[0].Duration);
-        var underSameSky = Tracks.FirstOrDefault(track => track.Title == "Under the Same Sky");
-        if (underSameSky is not null) underSameSky.Lyrics = AddDemoWordTimings(underSameSky.Lyrics, underSameSky.Duration);
-        var lateNight = new Playlist("Late night");
-        lateNight.Tracks.Add(Tracks[1]);
-        lateNight.Tracks.Add(Tracks[3]);
-        var softFocus = new Playlist("Soft focus");
-        softFocus.Tracks.Add(Tracks[0]);
-        softFocus.Tracks.Add(Tracks[2]);
-        Playlists = [lateNight, softFocus];
-        RecentTracks = [Tracks[0], Tracks[2], Tracks[1]];
-        _currentTrack = Tracks[0];
-        _currentTrack.IsCurrent = true;
-        _playbackQueue = Tracks;
         Text = new LocalizedText();
         Text.PropertyChanged += Text_PropertyChanged;
+
+        // 曲库从真的空开始。导入文件夹才会往里加；空歌曲只是个绑定占位，
+        // 控制台不会把它当歌行显示。
+        Tracks = [];
+        Playlists = [];
+        RecentTracks = [];
+        _emptyTrack = CreateEmptyTrack();
+        _currentTrack = _emptyTrack;
+        _playbackQueue = Tracks;
         RefreshPlaybackOptions();
         Palette = MonetPaletteService.FromColorSeed(_currentTrack.ArtworkColor);
         _currentPage = new LibraryPageViewModel(Tracks);
@@ -145,19 +149,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         ClosePopoverCommand = new RelayCommand(_ => ActivePopover = string.Empty);
         ToggleMoreSectionCommand = new RelayCommand(parameter => ToggleMoreSection(parameter?.ToString() ?? string.Empty));
         ToggleMuteCommand = new RelayCommand(_ => ToggleMute());
-        ToggleFloatingLyricsCommand = new RelayCommand(_ => IsFloatingLyricsVisible = !IsFloatingLyricsVisible);
+        ToggleFloatingLyricsCommand = new RelayCommand(_ => {
+            if (!HasCurrentTrack && !IsFloatingLyricsVisible) {
+                SetStatus("StatusNoTrack");
+                return;
+            }
+
+            IsFloatingLyricsVisible = !IsFloatingLyricsVisible;
+        });
         CycleEqualizerCommand = new RelayCommand(_ => CycleEqualizer());
         SelectEqualizerCommand = new RelayCommand(parameter => {
             if (parameter is PlaybackOptionViewModel option) {
                 EqualizerPresetIndex = option.Index;
                 SetStatus("StatusEqualizer", EqualizerPresetLabel);
-            }
-        });
-        CyclePlaybackSpeedCommand = new RelayCommand(_ => CyclePlaybackSpeed());
-        SelectPlaybackSpeedCommand = new RelayCommand(parameter => {
-            if (parameter is PlaybackOptionViewModel option) {
-                PlaybackSpeedIndex = option.Index;
-                SetStatus("StatusPlaybackSpeed", PlaybackSpeedLabel);
             }
         });
         SetAbLoopACommand = new RelayCommand(_ => SetAbLoopA());
@@ -167,6 +171,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             if (parameter is PlaybackOptionViewModel option) SleepTimerSelectionIndex = option.Index;
         });
         OpenPlayerCommand = new RelayCommand(_ => {
+            if (!HasCurrentTrack) {
+                SetStatus("StatusNoTrack");
+                return;
+            }
+
             IsLyricsMode = true;
         });
         ExitLyricsCommand = new RelayCommand(_ => ExitLyricsMode());
@@ -181,19 +190,31 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         CreatePlaylistCommand = new RelayCommand(_ => CreatePlaylist());
         DeletePlaylistCommand = new RelayCommand(_ => DeleteSelectedPlaylist());
 
-        // 100 ms keeps the seek fill and lyric clock visibly smooth without a per-frame timer.
+        // 100ms，进度填充和歌词时钟看起来够顺，又不用每帧跑计时器。
         _playbackTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         _playbackTimer.Tick += PlaybackTimer_Tick;
         _playbackTimer.Start();
-        // ~30 fps keeps the ambient field and seek wave smooth without a full per-frame timer.
+        // 大概 30fps，环境光场和进度波浪够滑，不用每帧计时。
         _ambientTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
         _ambientTimer.Tick += AmbientTimer_Tick;
         _ambientTimer.Start();
+        // 改音调挺贵（原生 runtime 可能得重载 media），等滑块停一下再应用，
+        // 别指针每动一下就来一次。
+        _pitchApplyTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        _pitchApplyTimer.Tick += PitchApplyTimer_Tick;
         _playback.SetVolume(_volume);
         _playback.SetRate(PlaybackSpeed);
+        _playback.SetPitch(PitchSemitones, IsPitchSyncEnabled);
         ApplyEqualizer();
         UpdateCurrentLyric();
+        UpdateSystemMedia();
     }
+
+    /// <summary>系统媒体控制要求把应用拉到前台时触发。</summary>
+    public event Action? RaiseRequested;
+
+    /// <summary>系统媒体控制要求退出时触发。</summary>
+    public event Action? QuitRequested;
 
     public ObservableCollection<Music> Tracks { get; }
     public ObservableCollection<Playlist> Playlists { get; }
@@ -212,8 +233,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     public MonetPalette Palette { get; private set; }
 
     /// <summary>
-    /// Cover-derived colours for the immersive fluid field. Demo tracks have no bitmap, so they
-    /// fall back to the same muted palette used by the rest of the UI.
+    /// 沉浸歌词流体背景用的封面色。没封面的歌就没位图，退回 UI 那套灰调。
     /// </summary>
     public string LyricsBackdropBase => CurrentTrack.ArtworkBackgroundColor ?? Palette.WindowBackground;
     public string LyricsBackdropAccent => CurrentTrack.ArtworkAccentColor ?? Palette.Accent;
@@ -238,8 +258,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     public RelayCommand ToggleFloatingLyricsCommand { get; }
     public RelayCommand CycleEqualizerCommand { get; }
     public RelayCommand SelectEqualizerCommand { get; }
-    public RelayCommand CyclePlaybackSpeedCommand { get; }
-    public RelayCommand SelectPlaybackSpeedCommand { get; }
     public RelayCommand SetAbLoopACommand { get; }
     public RelayCommand SetAbLoopBCommand { get; }
     public RelayCommand ClearAbLoopCommand { get; }
@@ -282,6 +300,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             OnPropertyChanged(nameof(PlaybackOrderLabel));
             ResetShuffleState();
             QueueStateSave();
+            UpdateSystemMedia();
         }
     }
 
@@ -296,6 +315,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             OnPropertyChanged(nameof(IsRepeatAll));
             OnPropertyChanged(nameof(IsRepeatActive));
             QueueStateSave();
+            UpdateSystemMedia();
         }
     }
 
@@ -336,8 +356,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     public bool HasActivePopover => !string.IsNullOrEmpty(ActivePopover);
 
     /// <summary>
-    /// Which inline section of the "more playback options" menu is expanded. The menu is a compact
-    /// list of rows; each row reveals its controls in place instead of showing every control at once.
+    /// “更多播放选项”里当前展开的是哪一段。菜单是一列紧凑的行，
+    /// 点哪行就在原地展开控件，不是一次全铺开。
     /// </summary>
     public string ExpandedMoreSection {
         get => _expandedMoreSection;
@@ -357,7 +377,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     public bool IsMoreAbLoopOpen => ExpandedMoreSection == "abloop";
     public bool IsMoreSleepTimerOpen => ExpandedMoreSection == "sleep";
 
-    /// <summary>Compact trailing value shown on each menu row (e.g. "Warm", "1.25×").</summary>
+    /// <summary>菜单行右边那个小值，比如 "Warm"、"1.25×"。</summary>
     public string EqualizerMenuValue => EqualizerPresetLabel;
     public string SpeedMenuValue => PlaybackSpeedLabel;
     public string AbLoopMenuValue => _abLoopState switch {
@@ -374,10 +394,29 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             _isCompactLayout = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(IsWideLayout));
+            OnPropertyChanged(nameof(ConsoleMargin));
+            OnPropertyChanged(nameof(PopoverMargin));
+            OnPropertyChanged(nameof(StatusCardMargin));
         }
     }
 
     public bool IsWideLayout => !IsCompactLayout;
+
+    /// <summary>
+    /// 宽屏时控制台放在内容列下面，侧边栏的状态卡才能贴到最底。
+    /// 窄屏退回全宽控制台，并在它上面给状态卡留出底部空间。
+    /// </summary>
+    public Thickness ConsoleMargin => IsWideLayout
+        ? new Thickness(256, 0, 18, 10)
+        : new Thickness(18, 0, 18, 10);
+
+    public Thickness PopoverMargin => IsWideLayout
+        ? new Thickness(256, 0, 18, 16)
+        : new Thickness(18, 0, 18, 16);
+
+    public Thickness StatusCardMargin => IsWideLayout
+        ? new Thickness(2, 14, 2, 14)
+        : new Thickness(2, 14, 2, 90);
 
     public double Volume {
         get => _volume;
@@ -391,6 +430,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             OnPropertyChanged(nameof(VolumePercentage));
             OnPropertyChanged(nameof(IsMuted));
             QueueStateSave();
+            UpdateSystemMedia();
         }
     }
 
@@ -413,17 +453,46 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         }
     }
 
-    public int PlaybackSpeedIndex {
-        get => _playbackSpeedIndex;
-        private set {
-            var nextValue = Math.Clamp(value, 0, PlaybackSpeedValues.Length - 1);
-            if (_playbackSpeedIndex == nextValue) return;
-            _playbackSpeedIndex = nextValue;
+    public double PlaybackSpeed {
+        get => _playbackSpeed;
+        set {
+            var nextValue = Math.Round(Math.Clamp(value, MinimumPlaybackSpeed, MaximumPlaybackSpeed), 2);
+            if (Math.Abs(_playbackSpeed - nextValue) < 0.001) return;
+            _playbackSpeed = nextValue;
+            _playback.SetRate(nextValue);
             OnPropertyChanged();
             OnPropertyChanged(nameof(PlaybackSpeedLabel));
             OnPropertyChanged(nameof(SpeedMenuValue));
-            SelectOption(PlaybackSpeedOptions, nextValue);
-            _playback.SetRate(PlaybackSpeed);
+            QueueStateSave();
+            UpdateSystemMedia();
+        }
+    }
+
+    public bool IsPitchSyncEnabled {
+        get => _isPitchSyncEnabled;
+        set {
+            if (_isPitchSyncEnabled == value) return;
+            _isPitchSyncEnabled = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(PitchSyncStateLabel));
+            _pitchApplyTimer.Stop();
+            _playback.SetPitch(_pitchSemitones, value);
+            SetStatus("StatusPitchSync", PitchSyncStateLabel);
+            QueueStateSave();
+        }
+    }
+
+    public double PitchSemitones {
+        get => _pitchSemitones;
+        set {
+            var nextValue = Math.Round(Math.Clamp(value, -12, 12), 1);
+            if (Math.Abs(_pitchSemitones - nextValue) < 0.01) return;
+            _pitchSemitones = nextValue;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(PitchLabel));
+            OnPropertyChanged(nameof(ShowPitchUnsupportedNote));
+            _pitchApplyTimer.Stop();
+            _pitchApplyTimer.Start();
             QueueStateSave();
         }
     }
@@ -446,8 +515,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         }
     }
 
-    public double PlaybackSpeed => PlaybackSpeedValues[PlaybackSpeedIndex];
-    public string PlaybackSpeedLabel => $"{PlaybackSpeed:0.##}×";
+    public string PlaybackSpeedLabel => $"{PlaybackSpeed:0.00}×";
+    public string PitchLabel => Text.Format("PitchValue", PitchSemitones.ToString("+0.#;-0.#;0"));
+    public string PitchSyncStateLabel => Text[IsPitchSyncEnabled ? "StateOn" : "StateOff"];
+    public bool IsPitchShiftSupported => _playback.SupportsPitchShift;
+
+    /// <summary>用户真去拖音调了再解释这个限制。</summary>
+    public bool ShowPitchUnsupportedNote => !IsPitchShiftSupported && Math.Abs(PitchSemitones) > 0.01;
     public string EqualizerPresetLabel => Text[EqualizerPresetKeys[EqualizerPresetIndex]];
     public ObservableCollection<EqualizerBandViewModel> EqualizerBands { get; } = [
         new("31", 0.5), new("125", 0.5), new("500", 0.5), new("2k", 0.5), new("8k", 0.5)
@@ -462,7 +536,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     public string QueueCountLabel => Text.Format("QueueCount", PlaybackQueue.Count);
     public ObservableCollection<PlaybackOptionViewModel> SleepTimerOptions { get; } = [];
     public ObservableCollection<PlaybackOptionViewModel> EqualizerOptions { get; } = [];
-    public ObservableCollection<PlaybackOptionViewModel> PlaybackSpeedOptions { get; } = [];
 
     public bool HasSleepTimer => _sleepDeadlineUtc is not null;
 
@@ -497,14 +570,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         }
     }
 
+    public bool HasCurrentTrack => !ReferenceEquals(_currentTrack, _emptyTrack);
+
     public Music CurrentTrack {
         get => _currentTrack;
         private set {
             if (_currentTrack == value) return;
             _currentTrack.IsCurrent = false;
             _currentTrack = value;
-            _currentTrack.IsCurrent = true;
+            _currentTrack.IsCurrent = HasCurrentTrack;
             OnPropertyChanged();
+            OnPropertyChanged(nameof(HasCurrentTrack));
+            OnPropertyChanged(nameof(IsTransportPlaying));
             OnPropertyChanged(nameof(CurrentDurationSeconds));
             OnPropertyChanged(nameof(DurationLabel));
             OnPropertyChanged(nameof(LocalQualityLabel));
@@ -524,13 +601,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             OnPropertyChanged(nameof(AbLoopStartFraction));
             OnPropertyChanged(nameof(AbLoopEndFraction));
             _ = TryLoadSidecarForCurrentTrackAsync(value);
+            UpdateSystemMedia();
         }
     }
 
     /// <summary>
-    /// Scans a folder tree in the background and appends its audio files to a playlist. The scan
-    /// also attaches same-folder cover art and lyric sidecars, including one-song folders whose
-    /// lyric file does not share the audio file's name.
+    /// 后台扫文件夹，把音频追加到歌单。同目录封面和歌词 sidecar 也一起挂上；
+    /// 只有一首歌的文件夹里，歌词文件名跟音频不一样也能认。
     /// </summary>
     public async Task ImportFolderToPlaylistAsync(
         Playlist playlist,
@@ -582,6 +659,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             if (added > 0 && ReferenceEquals(SelectedPlaylist, playlist)) {
                 PlaybackQueue = playlist.Tracks;
             }
+
+            if (!HasCurrentTrack && Tracks.Count > 0) {
+                // 先选中导入的第一首，控制台和传输控件才有目标。
+                // 跟恢复时一个做法，不会自己开始放。
+                CurrentTrack = Tracks[0];
+                ApplyPlaybackPosition(TimeSpan.Zero);
+                ResetShuffleState();
+            }
+
             OnPropertyChanged(nameof(QueueCountLabel));
 
             if (added == 0) {
@@ -608,12 +694,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     }
 
     public async Task LoadLyricsFromFileAsync(string path) {
+        if (!HasCurrentTrack) {
+            SetStatus("StatusNoTrack");
+            return;
+        }
+
         try {
             var track = CurrentTrack;
             var document = await _lyricsService.LoadAsync(path, track.Duration);
             if (!ReferenceEquals(track, CurrentTrack)) return;
-            // Keep the full path so the manual choice survives a restart; the status message
-            // still shows only the file name.
+            // 存完整路径，手动选的歌词重启后还在；状态提示里只显示文件名。
             ApplyLyrics(document, path, manual: true);
             QueueStateSave();
             ActivePopover = string.Empty;
@@ -626,7 +716,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         }
     }
 
-    /// <summary>Attaches parsed lyrics to the current track and refreshes every lyric binding.</summary>
+    /// <summary>把解析好的歌词挂到当前歌曲上，刷新所有歌词绑定。</summary>
     public void ApplyLyrics(LyricsDocument document, string? sourcePath = null, bool manual = false) {
         CurrentTrack.Lyrics = document.Lines;
         CurrentTrack.LyricsFormat = document.Format;
@@ -647,8 +737,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     }
 
     /// <summary>
-    /// Sidecar loading is deliberately conservative: it only runs for tracks without manual or
-    /// existing lyrics, so imported or demo lyrics are never replaced behind the user's back.
+    /// sidecar 加载故意保守：只给没有手动歌词、也还没有歌词的歌跑。
+    /// 导入的或者本来就有的歌词，不会背着用户被换掉。
     /// </summary>
     private async Task TryLoadSidecarForCurrentTrackAsync(Music track) {
         if (track.HasManualLyrics || track.Lyrics.Count > 0) return;
@@ -682,8 +772,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             if (_isPlaying == value) return;
             _isPlaying = value;
             OnPropertyChanged();
+            OnPropertyChanged(nameof(IsTransportPlaying));
+            UpdateSystemMedia();
         }
     }
+
+    /// <summary>没有当前歌曲时为 false，空控制台显示播放图标。</summary>
+    public bool IsTransportPlaying => HasCurrentTrack && IsPlaying;
 
     public double CurrentDurationSeconds => Math.Max(1, CurrentTrack.Duration.TotalSeconds);
     public bool NoLyricsAvailable => CurrentTrack.Lyrics.Count == 0;
@@ -692,27 +787,114 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     public string CurrentLyricText => CurrentLyricIndex >= 0 ? CurrentTrack.Lyrics[CurrentLyricIndex].Text : string.Empty;
     public string CurrentLyricTranslation => CurrentLyricIndex >= 0 ? CurrentTrack.Lyrics[CurrentLyricIndex].Translation ?? string.Empty : string.Empty;
     public bool HasCurrentLyricTranslation => !string.IsNullOrWhiteSpace(CurrentLyricTranslation);
-    public string CurrentTimeLabel => TimeSpan.FromSeconds(CurrentPositionSeconds).ToString(@"m\:ss");
-    public string DurationLabel => CurrentTrack.Duration.ToString(@"m\:ss");
-    public string LocalQualityLabel => CurrentTrack.LocalQualityLabel;
+    public string CurrentTimeLabel => !HasCurrentTrack
+        ? "0:00"
+        : TimeSpan.FromSeconds(
+            _isSeeking ? _seekPositionSeconds : _pendingSeekTargetSeconds ?? _currentPositionSeconds).ToString(@"m\:ss");
+    public string DurationLabel => HasCurrentTrack ? CurrentTrack.Duration.ToString(@"m\:ss") : "0:00";
+    public string LocalQualityLabel => HasCurrentTrack ? CurrentTrack.LocalQualityLabel : string.Empty;
 
     public double CurrentPositionSeconds {
         get => _currentPositionSeconds;
-        set => SetPosition(value, seek: true);
+        set {
+            if (!HasCurrentTrack) {
+                _pendingSeekTargetSeconds = null;
+                SetPosition(0, seek: false);
+                return;
+            }
+
+            var target = Math.Clamp(value, 0, CurrentDurationSeconds);
+            if (_playback.IsLoaded && Math.Abs(target - _currentPositionSeconds) >= 0.001) {
+                _pendingSeekTargetSeconds = target;
+                _pendingSeekUntilUtc = DateTime.UtcNow.AddMilliseconds(800);
+            }
+            else if (!_playback.IsLoaded) {
+                _pendingSeekTargetSeconds = null;
+            }
+
+            SetPosition(target, seek: true);
+        }
+    }
+
+    /// <summary>
+    /// 进度条显示的位置。指针按着时直接更新，松手才提交给后端，
+    /// 播放时钟没法把滑块拽走。
+    /// </summary>
+    public double SeekPositionSeconds {
+        get => _seekPositionSeconds;
+        set {
+            if (!HasCurrentTrack) {
+                if (Math.Abs(_seekPositionSeconds) < 0.001) return;
+                _seekPositionSeconds = 0;
+                OnPropertyChanged();
+                return;
+            }
+
+            var nextValue = Math.Clamp(value, 0, CurrentDurationSeconds);
+            if (Math.Abs(_seekPositionSeconds - nextValue) < 0.001) return;
+            _seekPositionSeconds = nextValue;
+            OnPropertyChanged();
+            if (_isSeeking) OnPropertyChanged(nameof(CurrentTimeLabel));
+        }
+    }
+
+    public bool IsSeeking => _isSeeking;
+
+    public void BeginSeek() {
+        if (!HasCurrentTrack || _isSeeking) return;
+        _isSeeking = true;
+        OnPropertyChanged(nameof(IsSeeking));
+        OnPropertyChanged(nameof(CurrentTimeLabel));
+    }
+
+    public void CommitSeek(double seconds) {
+        if (!HasCurrentTrack) {
+            _isSeeking = false;
+            _pendingSeekTargetSeconds = null;
+            if (Math.Abs(_seekPositionSeconds) > 0.001) {
+                _seekPositionSeconds = 0;
+                OnPropertyChanged(nameof(SeekPositionSeconds));
+            }
+            OnPropertyChanged(nameof(IsSeeking));
+            OnPropertyChanged(nameof(CurrentTimeLabel));
+            return;
+        }
+
+        var target = Math.Clamp(seconds, 0, CurrentDurationSeconds);
+        _isSeeking = false;
+        _seekPositionSeconds = target;
+        OnPropertyChanged(nameof(IsSeeking));
+        OnPropertyChanged(nameof(SeekPositionSeconds));
+
+        if (Math.Abs(target - _currentPositionSeconds) < 0.001) {
+            _pendingSeekTargetSeconds = null;
+            OnPropertyChanged(nameof(CurrentTimeLabel));
+            return;
+        }
+
+        _pendingSeekTargetSeconds = _playback.IsLoaded ? target : null;
+        _pendingSeekUntilUtc = DateTime.UtcNow.AddMilliseconds(800);
+        SetPosition(target, seek: true);
+        OnPropertyChanged(nameof(CurrentTimeLabel));
     }
 
     private void SetPosition(double seconds, bool seek) {
         var nextValue = Math.Clamp(seconds, 0, CurrentDurationSeconds);
         if (Math.Abs(_currentPositionSeconds - nextValue) < 0.001) return;
         _currentPositionSeconds = nextValue;
-        // This method is not a property setter, so CallerMemberName would report "SetPosition"
-        // and bindings such as the seek bar would never see the playback clock advance.
+        if (!_isSeeking) {
+            _seekPositionSeconds = nextValue;
+            OnPropertyChanged(nameof(SeekPositionSeconds));
+        }
+        // 这个方法不是属性 setter，CallerMemberName 会报 "SetPosition"，
+        // 进度条这类绑定就永远看不到播放时钟在走。
         OnPropertyChanged(nameof(CurrentPositionSeconds));
         OnPropertyChanged(nameof(CurrentTimeLabel));
         UpdateCurrentLyric();
         if (seek && !_suppressSeek && _playback.IsLoaded) {
             _playback.Seek(TimeSpan.FromSeconds(nextValue));
         }
+        if (seek) UpdateSystemMedia();
     }
 
     private void ApplyPlaybackPosition(TimeSpan position) {
@@ -804,6 +986,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         OnPropertyChanged(nameof(CurrentLyricText));
         OnPropertyChanged(nameof(CurrentLyricTranslation));
         OnPropertyChanged(nameof(FloatingLyricsStateLabel));
+        OnPropertyChanged(nameof(PitchSyncStateLabel));
+        OnPropertyChanged(nameof(PitchLabel));
         RefreshPlaybackOptions();
 
         if (CurrentPage is PlaylistDetailPageViewModel detail) {
@@ -832,6 +1016,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     private void PlayTrack(Music track, ObservableCollection<Music>? queue = null) {
         if (queue is not null) PlaybackQueue = queue;
         CurrentTrack = track;
+        _pendingSeekTargetSeconds = null;
+        _isSeeking = false;
         AbLoopReset();
         ApplyPlaybackPosition(TimeSpan.Zero);
         if (!StartTrack(track, TimeSpan.Zero, autoplay: true)) return;
@@ -842,6 +1028,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     }
 
     private bool StartTrack(Music track, TimeSpan startAt, bool autoplay) {
+        if (!HasCurrentTrack) return false;
         if (track.IsLocalFile && !track.HasPlayableFile) {
             _playback.Stop();
             IsPlaying = false;
@@ -860,6 +1047,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             return false;
         }
 
+        if (startAt > TimeSpan.Zero) {
+            // start seek 落下去之前，后端会先报一会儿 0。UI 先停在请求的位置，
+            // 别一下弹回开头。
+            _pendingSeekTargetSeconds = startAt.TotalSeconds;
+            _pendingSeekUntilUtc = DateTime.UtcNow.AddMilliseconds(800);
+        }
+        else {
+            _pendingSeekTargetSeconds = null;
+        }
+
         ApplyPlaybackPosition(startAt);
         IsPlaying = autoplay;
         if (autoplay) {
@@ -873,6 +1070,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         new(track.FilePath, track.Duration, track.IsLocalFile);
 
     private void TogglePlayback() {
+        if (!HasCurrentTrack) {
+            SetStatus("StatusNoTrack");
+            return;
+        }
+
         if (_playback.IsLoaded) {
             if (IsPlaying) {
                 _playback.Pause();
@@ -958,7 +1160,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
 
         var unplayed = PlaybackQueue.Where(track => !_shufflePlayed.Contains(track) && !ReferenceEquals(track, CurrentTrack)).ToList();
         if (unplayed.Count == 0) {
-            // With shuffle and no repeat, stop once every track has been heard.
+            // 随机且不循环时，全部听过一遍就停。
             if (RepeatMode == RepeatMode.Off) {
                 _playback.Stop();
                 IsPlaying = false;
@@ -985,8 +1187,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     }
 
     private void RestartCurrentTrack() {
+        if (!HasCurrentTrack) return;
         ApplyPlaybackPosition(TimeSpan.Zero);
         if (_playback.IsLoaded) {
+            _pendingSeekTargetSeconds = 0;
+            _pendingSeekUntilUtc = DateTime.UtcNow.AddMilliseconds(800);
             _playback.Seek(TimeSpan.Zero);
             _playback.Play();
             IsPlaying = true;
@@ -1000,7 +1205,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     private void ResetShuffleState() {
         _shuffleHistory.Clear();
         _shufflePlayed.Clear();
-        if (PlaybackQueue.Count > 0) _shufflePlayed.Add(CurrentTrack);
+        if (PlaybackQueue.Count > 0 && HasCurrentTrack) _shufflePlayed.Add(CurrentTrack);
     }
 
     private void CycleRepeatMode() {
@@ -1045,11 +1250,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     private void ApplyEqualizer() {
         var levels = EqualizerBands.Select(band => band.Level).ToArray();
         _playback.SetEqualizer(new EqualizerSettings(levels));
-    }
-
-    private void CyclePlaybackSpeed() {
-        PlaybackSpeedIndex = (PlaybackSpeedIndex + 1) % PlaybackSpeedValues.Length;
-        SetStatus("StatusPlaybackSpeed", PlaybackSpeedLabel);
     }
 
     private void SetAbLoopA() {
@@ -1105,7 +1305,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             ? Text["SleepOff"]
             : Text.Format("SleepMinutes", SleepTimerMinuteValues[index]), SleepTimerSelectionIndex);
         SyncOptions(EqualizerOptions, EqualizerPresetKeys.Length, index => Text[EqualizerPresetKeys[index]], EqualizerPresetIndex);
-        SyncOptions(PlaybackSpeedOptions, PlaybackSpeedValues.Length, index => $"{PlaybackSpeedValues[index]:0.##}×", PlaybackSpeedIndex);
     }
 
     private static void SyncOptions(ObservableCollection<PlaybackOptionViewModel> options, int count, Func<int, string> labelFactory, int selectedIndex) {
@@ -1122,6 +1321,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     }
 
     private void Stop() {
+        if (!HasCurrentTrack) return;
+        _pendingSeekTargetSeconds = null;
+        _isSeeking = false;
         _playback.Stop();
         IsPlaying = false;
         ApplyPlaybackPosition(TimeSpan.Zero);
@@ -1215,10 +1417,35 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         Volume = Math.Clamp(state.Playback.Volume, 0, 1);
         IsShuffleMode = state.Playback.Shuffle;
         RepeatMode = ParseRepeatMode(state.Playback.RepeatMode);
-        PlaybackSpeedIndex = state.Playback.SpeedIndex;
+        PlaybackSpeed = state.Playback.Speed ?? MapLegacySpeedIndex(state.Playback.SpeedIndex);
+        _isPitchSyncEnabled = state.Playback.PitchSync;
+        _pitchSemitones = Math.Clamp(state.Playback.PitchSemitones, -12, 12);
+        OnPropertyChanged(nameof(IsPitchSyncEnabled));
+        OnPropertyChanged(nameof(PitchSyncStateLabel));
+        OnPropertyChanged(nameof(PitchSemitones));
+        OnPropertyChanged(nameof(PitchLabel));
+        OnPropertyChanged(nameof(ShowPitchUnsupportedNote));
+        _playback.SetPitch(_pitchSemitones, _isPitchSyncEnabled);
         EqualizerPresetIndex = state.Playback.EqualizerPresetIndex;
         IsFloatingLyricsVisible = state.Ui.FloatingLyricsVisible;
     }
+
+    private static double MapLegacySpeedIndex(int index) => index switch {
+        0 => 0.75,
+        1 => 1.0,
+        2 => 1.25,
+        3 => 1.5,
+        4 => 2.0,
+        _ => 1.0
+    };
+
+    private static int MapSpeedToLegacyIndex(double speed) => speed switch {
+        <= 0.875 => 0,
+        <= 1.125 => 1,
+        <= 1.375 => 2,
+        <= 1.75 => 3,
+        _ => 4
+    };
 
     private void ApplyRestoredState(PlayerState state, RestoredLibrary restored) {
         var comparer = OperatingSystem.IsWindows()
@@ -1261,6 +1488,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             var position = Math.Clamp(state.Playback.LastPositionSeconds, 0, lastTrack.Duration.TotalSeconds);
             ApplyPlaybackPosition(TimeSpan.FromSeconds(position));
         }
+        else if (Tracks.Count > 0) {
+            // 曲库还在，但上次那首没了（比如老的 demo 路径）。选中恢复出来的第一首，
+            // 但不自动播放，控制台和传输控件还有个目标。
+            CurrentTrack = Tracks[0];
+            ApplyPlaybackPosition(TimeSpan.Zero);
+        }
 
         ResetShuffleState();
         SetStatus(restored.MissingPaths.Count > 0 ? "StatusRestoreMissing" : "StatusIdle",
@@ -1301,8 +1534,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
                 || string.IsNullOrWhiteSpace(track.FilePath)
                 || string.IsNullOrWhiteSpace(track.LyricsSourcePath)) return;
             try {
-                // Do not probe the file here: a disconnected network share must not block the
-                // UI-thread state snapshot. The restorer checks existence off the UI thread.
+                // 这里别去探文件：断开的网络共享会把 UI 线程上的状态快照卡住。
+                // 存不存在交给 restorer 在 UI 线程外查。
                 if (!Path.IsPathFullyQualified(track.LyricsSourcePath)) return;
             }
             catch (Exception) {
@@ -1321,10 +1554,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
                 LastNonZeroVolume = _lastNonZeroVolume,
                 Shuffle = _isShuffleMode,
                 RepeatMode = _repeatMode.ToString(),
-                SpeedIndex = _playbackSpeedIndex,
+                SpeedIndex = MapSpeedToLegacyIndex(_playbackSpeed),
+                Speed = _playbackSpeed,
+                PitchSync = _isPitchSyncEnabled,
+                PitchSemitones = _pitchSemitones,
                 EqualizerPresetIndex = _equalizerPresetIndex,
-                LastTrackPath = string.IsNullOrWhiteSpace(CurrentTrack.FilePath) ? null : CurrentTrack.FilePath,
-                LastPositionSeconds = _currentPositionSeconds
+                LastTrackPath = HasCurrentTrack && !string.IsNullOrWhiteSpace(CurrentTrack.FilePath)
+                    ? CurrentTrack.FilePath
+                    : null,
+                LastPositionSeconds = HasCurrentTrack ? _currentPositionSeconds : 0
             },
             Library = new LibrarySettings {
                 TrackPaths = trackPaths,
@@ -1354,8 +1592,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             if (_disposed || _playback.CurrentSession is not { } current || current.Id != ended.Session.Id) return;
 
             if (IsAbLoopActive && _abLoopStartSeconds is { } start) {
-                // Reload the source at A rather than seeking an ended MediaPlayer; some formats
-                // ignore a seek while stopped, which would restart the track at zero.
+                // A–B 回绕时在 A 点重载源，不去 seek 已经结束的 MediaPlayer；
+                // 有些格式在停止状态会忽略 seek，结果从 0 重新开始。
                 StartTrack(CurrentTrack, TimeSpan.FromSeconds(start), autoplay: true);
                 return;
             }
@@ -1393,18 +1631,116 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         if (IsSystemFullscreen) IsSystemFullscreen = false;
     }
 
+    private void SystemMedia_CommandReceived(SystemMediaCommand command) {
+        Dispatcher.UIThread.Post(() => {
+            if (_disposed) return;
+            switch (command.Kind) {
+                case SystemMediaCommandKind.Play:
+                    if (!IsPlaying) TogglePlayback();
+                    break;
+                case SystemMediaCommandKind.Pause:
+                    if (IsPlaying) TogglePlayback();
+                    break;
+                case SystemMediaCommandKind.TogglePlayPause:
+                    TogglePlayback();
+                    break;
+                case SystemMediaCommandKind.Stop:
+                    Stop();
+                    break;
+                case SystemMediaCommandKind.Next:
+                    MoveTrack(1);
+                    break;
+                case SystemMediaCommandKind.Previous:
+                    MoveTrack(-1);
+                    break;
+                case SystemMediaCommandKind.Seek:
+                    CurrentPositionSeconds = command.Position.TotalSeconds;
+                    break;
+                case SystemMediaCommandKind.Shuffle:
+                    IsShuffleMode = command.Flag;
+                    break;
+                case SystemMediaCommandKind.Repeat:
+                    RepeatMode = command.Repeat switch {
+                        SystemMediaRepeatMode.Track => RepeatMode.Track,
+                        SystemMediaRepeatMode.Playlist => RepeatMode.Playlist,
+                        _ => RepeatMode.Off
+                    };
+                    break;
+                case SystemMediaCommandKind.Volume:
+                    Volume = command.Number;
+                    break;
+                case SystemMediaCommandKind.Raise:
+                    RaiseRequested?.Invoke();
+                    break;
+                case SystemMediaCommandKind.Quit:
+                    QuitRequested?.Invoke();
+                    break;
+            }
+        });
+    }
+
+    private void UpdateSystemMedia() {
+        if (_disposed) return;
+        if (!HasCurrentTrack) {
+            if (!_systemMediaCleared) {
+                _services.SystemMedia.Clear();
+                _systemMediaCleared = true;
+            }
+            return;
+        }
+
+        _systemMediaCleared = false;
+        var track = CurrentTrack;
+        _services.SystemMedia.Update(new SystemMediaSnapshot(
+            track.Title,
+            track.Artist,
+            track.Album,
+            track.Duration,
+            _services.SystemMediaArtwork.GetPath(track),
+            track.IsLocalFile ? track.FilePath : null,
+            IsPlaying,
+            TimeSpan.FromSeconds(CurrentPositionSeconds),
+            Volume,
+            IsShuffleMode,
+            RepeatMode switch {
+                RepeatMode.Track => SystemMediaRepeatMode.Track,
+                RepeatMode.Playlist => SystemMediaRepeatMode.Playlist,
+                _ => SystemMediaRepeatMode.Off
+            },
+            PlaybackSpeed));
+    }
+
     private void PlaybackTimer_Tick(object? sender, EventArgs e) {
         if (_playback.IsLoaded) {
             var snapshot = _playback.Snapshot;
             if (snapshot.IsPlaying != IsPlaying) IsPlaying = snapshot.IsPlaying;
-            ApplyPlaybackPosition(snapshot.Position);
 
-            if (snapshot.IsPlaying
+            var positionIsPending = false;
+            if (_pendingSeekTargetSeconds is { } pending) {
+                // 请求的位置先留在屏幕上，等后端真的追上。不然下一次 100ms 轮询会把滑块拽回去，
+                // seek 就显得不靠谱，已经播过的区域尤其明显。
+                var reported = snapshot.Position.TotalSeconds;
+                if (Math.Abs(reported - pending) <= 0.35 || DateTime.UtcNow >= _pendingSeekUntilUtc) {
+                    _pendingSeekTargetSeconds = null;
+                    ApplyPlaybackPosition(snapshot.Position);
+                }
+                else {
+                    positionIsPending = true;
+                }
+            }
+            else {
+                ApplyPlaybackPosition(snapshot.Position);
+            }
+
+            if (!positionIsPending
+                && !_isSeeking
+                && snapshot.IsPlaying
                 && IsAbLoopActive
                 && _abLoopStartSeconds is { } start
                 && _abLoopEndSeconds is { } end
                 && snapshot.Position.TotalSeconds >= end - 0.02) {
-                // A–B wraps through the backend so the real audio clock and the UI stay aligned.
+                // A–B 走后端回绕，真实音频时钟和 UI 才对得上。
+                _pendingSeekTargetSeconds = null;
                 ApplyPlaybackPosition(TimeSpan.FromSeconds(start));
                 _playback.Seek(TimeSpan.FromSeconds(start));
             }
@@ -1416,10 +1752,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         }
 
         UpdateSleepTimer();
+        UpdateSystemMedia();
     }
 
     private void AmbientTimer_Tick(object? sender, EventArgs e) {
-        // 0.008 per 33 ms keeps the original ~0.24 rad/s drift while raising the update rate.
+        // 33ms 走 0.008，保持原来 ~0.24 rad/s 的漂移，同时把更新率提上来。
         _ambientPhase += 0.008;
         OnPropertyChanged(nameof(AmbientPhase));
     }
@@ -1489,72 +1826,22 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         }
     }
 
-    /// <summary>
-    /// Demo-only helper: spreads a line's duration across its words so the prototype can show
-    /// word highlighting without a real audio clock or a bundled word-timed lyric file. Imported
-    /// files replace these synthetic timings.
-    /// </summary>
-    private static IReadOnlyList<LyricLine> AddDemoWordTimings(IReadOnlyList<LyricLine> lines, TimeSpan duration) {
-        var result = new List<LyricLine>(lines.Count);
-        for (var index = 0; index < lines.Count; index++) {
-            var line = lines[index];
-            var end = index + 1 < lines.Count ? lines[index + 1].Timestamp : duration;
-            var words = Regex.Matches(line.Text, @"\S+\s*")
-                .Select(match => match.Value)
-                .ToList();
-            if (words.Count == 0 || end <= line.Timestamp) {
-                result.Add(line);
-                continue;
-            }
-
-            var totalWeight = words.Sum(word => Math.Max(1, word.Trim().Length));
-            var span = end - line.Timestamp;
-            var cursor = line.Timestamp;
-            var timedWords = new List<LyricWord>(words.Count);
-            for (var wordIndex = 0; wordIndex < words.Count; wordIndex++) {
-                var weight = Math.Max(1, words[wordIndex].Trim().Length);
-                var wordEnd = wordIndex == words.Count - 1
-                    ? end
-                    : cursor + TimeSpan.FromTicks((long)(span.Ticks * (weight / (double)totalWeight)));
-                if (wordEnd <= cursor) wordEnd = cursor + TimeSpan.FromMilliseconds(1);
-                timedWords.Add(new LyricWord(words[wordIndex], cursor, wordEnd));
-                cursor = wordEnd;
-            }
-
-            result.Add(new LyricLine(line.Timestamp, line.Text, line.Translation, line.Romanization, end, timedWords));
-        }
-        return result;
+    private void PitchApplyTimer_Tick(object? sender, EventArgs e) {
+        _pitchApplyTimer.Stop();
+        _playback.SetPitch(_pitchSemitones, _isPitchSyncEnabled);
+        if (IsPitchShiftSupported) SetStatus("StatusPitch", PitchLabel);
     }
 
-    private static ObservableCollection<Music> CreateDemoTracks() => [
-        new Music {
-            Title = "A Walk Through the Rain", Artist = "Mira Sol", Album = "Quiet Cities", Genre = "Indie", Duration = TimeSpan.FromSeconds(228), ArtworkColor = "#5F7F72", FilePath = "demo/quiet-cities/01.flac", BitrateKbps = 1411,
-            Lyrics = [new(TimeSpan.FromSeconds(0), "The streets are silver after the rain", "雨后的街道泛着银光"), new(TimeSpan.FromSeconds(12), "And every window knows my name", "每一扇窗都认得我的名字"), new(TimeSpan.FromSeconds(25), "We take the long way home tonight", "今夜，我们绕远路回家"), new(TimeSpan.FromSeconds(39), "Under a sky of violet light", "走在紫色天光之下"), new(TimeSpan.FromSeconds(54), "The quiet has a sound of its own", "寂静也有自己的声音"), new(TimeSpan.FromSeconds(76), "A train is drawing lines in blue", "列车在蓝色夜色里划出轨迹"), new(TimeSpan.FromSeconds(101), "The city keeps a light for you", "这座城市为你留着一盏灯"), new(TimeSpan.FromSeconds(129), "We leave our hurried selves behind", "把匆忙的自己留在身后"), new(TimeSpan.FromSeconds(158), "And let the evening change its mind", "让夜晚慢慢改变心意"), new(TimeSpan.FromSeconds(190), "The rain lets go, the stars come through", "雨停了，星光穿过云层"), new(TimeSpan.FromSeconds(213), "The long way home leads back to you", "回家的长路，最终通向你")]
-        },
-        new Music {
-            Title = "Blue Hour, Again", Artist = "Juniper Vale", Album = "Soft Signals", Genre = "Electronic", Duration = TimeSpan.FromSeconds(194), ArtworkColor = "#3F7A86", FilePath = "demo/soft-signals/02.flac", BitrateKbps = 1536,
-            Lyrics = [new(TimeSpan.FromSeconds(0), "Stay until the blue turns gold"), new(TimeSpan.FromSeconds(14), "Tell me what the night has told"), new(TimeSpan.FromSeconds(28), "Every little light is close"), new(TimeSpan.FromSeconds(43), "Every road becomes a home"), new(TimeSpan.FromSeconds(63), "We can let the hours unwind"), new(TimeSpan.FromSeconds(86), "Leave the louder world behind"), new(TimeSpan.FromSeconds(111), "A quiet signal finds its way"), new(TimeSpan.FromSeconds(138), "And carries us into the day"), new(TimeSpan.FromSeconds(166), "Stay until the blue turns gold"), new(TimeSpan.FromSeconds(184), "There's still a story left untold")]
-        },
-        new Music {
-            Title = "Paper Moons", Artist = "Mira Sol", Album = "Quiet Cities", Genre = "Indie", Duration = TimeSpan.FromSeconds(246), ArtworkColor = "#B3785A", FilePath = "demo/quiet-cities/04.flac", BitrateKbps = 2304,
-            Lyrics = [new(TimeSpan.FromSeconds(0), "We made a world from paper moons"), new(TimeSpan.FromSeconds(16), "And hummed along to empty rooms"), new(TimeSpan.FromSeconds(31), "If morning comes, let it come slow"), new(TimeSpan.FromSeconds(46), "There's nowhere else we need to go"), new(TimeSpan.FromSeconds(71), "The ceiling turns to open skies"), new(TimeSpan.FromSeconds(98), "The truth is soft around the sides"), new(TimeSpan.FromSeconds(126), "A little hope, a little tune"), new(TimeSpan.FromSeconds(153), "We disappear into the room"), new(TimeSpan.FromSeconds(187), "We made a world from paper moons"), new(TimeSpan.FromSeconds(218), "And morning waits outside")]
-        },
-        new Music {
-            Title = "Almost Home (feat. Leila)", Artist = "Northbound", Album = "Open Windows", Genre = "Soul", Duration = TimeSpan.FromSeconds(213), ArtworkColor = "#B66F6B", FilePath = "demo/open-windows/03.flac", BitrateKbps = 1411,
-            Lyrics = [new(TimeSpan.FromSeconds(0), "I can see the porch light from here"), new(TimeSpan.FromSeconds(15), "The road gets softer when you're near"), new(TimeSpan.FromSeconds(30), "One more mile, one more song"), new(TimeSpan.FromSeconds(45), "I've been almost home all along"), new(TimeSpan.FromSeconds(67), "The windows glow against the dark"), new(TimeSpan.FromSeconds(91), "A small familiar kind of spark"), new(TimeSpan.FromSeconds(116), "The night folds up its coat of blue"), new(TimeSpan.FromSeconds(142), "And every step comes back to you"), new(TimeSpan.FromSeconds(169), "I can see the porch light shine"), new(TimeSpan.FromSeconds(196), "This way home is yours and mine")]
-        },
-        new Music {
-            Title = "Slow Motion", Artist = "Lena Grey", Album = "Little Hours", Genre = "Acoustic", Duration = TimeSpan.FromSeconds(181), ArtworkColor = "#A88E5E", FilePath = "demo/little-hours/01.flac", BitrateKbps = 1536,
-            Lyrics = [new(TimeSpan.FromSeconds(0), "Let the morning take its time"), new(TimeSpan.FromSeconds(13), "Let the dust become the light"), new(TimeSpan.FromSeconds(27), "Nothing here is asking us to run"), new(TimeSpan.FromSeconds(42), "We can move in slow motion"), new(TimeSpan.FromSeconds(62), "The kettle sings a quiet note"), new(TimeSpan.FromSeconds(84), "A little warmth inside my coat"), new(TimeSpan.FromSeconds(108), "The golden hour crosses the floor"), new(TimeSpan.FromSeconds(133), "We don't need anything more"), new(TimeSpan.FromSeconds(155), "Let the morning take its time"), new(TimeSpan.FromSeconds(172), "Let this little light be mine")]
-        },
-        new Music {
-            Title = "Under the Same Sky", Artist = "Juniper Vale", Album = "Soft Signals", Genre = "Electronic", Duration = TimeSpan.FromSeconds(205), ArtworkColor = "#5C8471", FilePath = "demo/soft-signals/05.flac", BitrateKbps = 2304,
-            Lyrics = [new(TimeSpan.FromSeconds(0), "Somewhere there the day begins"), new(TimeSpan.FromSeconds(14), "Somewhere here the night folds in"), new(TimeSpan.FromSeconds(29), "Different clocks, a single sky"), new(TimeSpan.FromSeconds(44), "You and I are passing by"), new(TimeSpan.FromSeconds(66), "The same wind moves the trees"), new(TimeSpan.FromSeconds(89), "Across a thousand quiet seas"), new(TimeSpan.FromSeconds(112), "No matter where the hours lie"), new(TimeSpan.FromSeconds(137), "We're looking at the same sky"), new(TimeSpan.FromSeconds(163), "Somewhere there the day begins"), new(TimeSpan.FromSeconds(188), "Somewhere here the night folds in")]
-        },
-        new Music {
-            Title = "Still Water", Artist = "Lena Grey", Album = "Little Hours", Genre = "Ambient", Duration = TimeSpan.FromSeconds(272), ArtworkColor = "#4B7B84", FilePath = "demo/little-hours/06.flac", BitrateKbps = 2822
-        }
-    ];
+    private static Music CreateEmptyTrack() => new() {
+        Title = "—",
+        Artist = string.Empty,
+        Album = string.Empty,
+        Genre = string.Empty,
+        ArtworkColor = "#4A3D2E",
+        Duration = TimeSpan.FromSeconds(1),
+        FilePath = string.Empty,
+        BitrateKbps = 0
+    };
 
     private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
@@ -1568,10 +1855,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         _playbackTimer.Tick -= PlaybackTimer_Tick;
         _ambientTimer.Stop();
         _ambientTimer.Tick -= AmbientTimer_Tick;
+        _pitchApplyTimer.Stop();
+        _pitchApplyTimer.Tick -= PitchApplyTimer_Tick;
         _playback.Ended -= Playback_Ended;
         _playback.Failed -= Playback_Failed;
         _stateSaver.SaveFailed -= StateSaver_SaveFailed;
+        _services.SystemMedia.CommandReceived -= SystemMedia_CommandReceived;
         Text.PropertyChanged -= Text_PropertyChanged;
+        _services.SystemMedia.Clear();
         _services.Dispose();
     }
 }
