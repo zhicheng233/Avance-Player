@@ -21,6 +21,7 @@ PlayerServices
 | `SwitchableAudioBackend.cs` | 按 `AudioSource.IsLocalFile` 选 LibVLC 或模拟后端。 |
 | `LibVlcAudioBackend.cs` | LibVLCSharp + 原生 libvlc 的真实播放。 |
 | `LibVlcRuntime.cs` | 原生运行时初始化、路径查找和实例选项。 |
+| `LibVlcNative.cs` | 直接调用 libvlccore 的 `var_Create`/`var_Set`，用来给 MediaPlayer 写滤镜链和音调。 |
 | `SimulatedAudioBackend.cs` | 没有音频输出的假后端，只按 `TimeProvider` 推进时钟。 |
 
 ## 会话和事件
@@ -35,7 +36,11 @@ PlayerServices
 - `LibVlcRuntime` 会先找 `AVANCE_LIBVLC_PATH`，再找 app 目录下的 `libvlc` 文件夹，最后交给 LibVLCSharp 自己找系统库。找不到时 `TryGet` 返回 null，播放会显示双语错误，不会崩。
 - 每个 `LibVlcAudioBackend` 一个 `LibVLC` 实例和一个 `MediaPlayer`。默认关视频、默认做音频时间伸缩；关掉音调同步时才加 `--no-audio-time-stretch`。音量/速度/均衡器直接落到 MediaPlayer。
 - 均衡器是 UI 的 5 段 0..1 映射到原生 10 段；模拟后端不处理。
-- 手动移调在 libvlc 3 的公开 API 里做不到。`SupportsPitchShift` 是 false，偏移值只存偏好，UI 会说明当前后端不支持。音调同步开关是有效的，它控制 `--audio-time-stretch`，切换时会在同一位置重载当前本地 media。
+  原生 `EQZ_IN_FACTOR` 是 0.25，0 dB 频段 + 0 dB preamp 会整体小 12 dB，所以 preamp 固定补 12 dB 回到单位增益（LibVLC 自己的 `equalizer-preamp` 默认值也是 12）。曲线先按平均值归零，避免换预设时整体响度跳变；最响频段再额外保留 3 dB 头顶空间，超出的从 preamp 里扣回来，防止 Bass 这类预设把满幅母带削顶。
+- 手动移调：libvlc 3 没有公开 API，但可以绕过公开层直接在 MediaPlayer 的原生对象上写 `audio-filter` / `pitch-shift` 两个变量（`LibVlcNative.cs` 解析 libvlccore 的 `var_Create` / `var_Set`）。滤镜链用空格分隔，`scaletempo_pitch` 和均衡器可以共存成 `"equalizer scaletempo_pitch"`。写入之后必须重建一次音频输出（`SetAudioFormat("S16N", 0, 0)`）并重载媒体，播到一半的 aout 已被 input 占用，只重建不会换链。
+  - `SupportsPitchShift` 只有在 libvlccore 互操作可用、并且 `LibVLC.AudioFilters` 里确实有 `scaletempo_pitch` 时才为 true；否则偏移值只存偏好，UI 说明当前后端不支持。
+  - `libvlc_media_player_set_equalizer` 会把 `audio-filter` 整个覆盖成 `"equalizer"`，所以滤镜链必须在设完均衡器之后再补写；音调正在生效时改均衡器要重载媒体。
+  - 实测：`+12` 半音把 999.5 Hz 的正弦变成 1999.5 Hz；`+5` 之类的中间值同样生效。音调同步开关仍然控制 `--audio-time-stretch`，切换时会在同一位置重载当前本地 media。
 - `Seek` 直接设置 `MediaPlayer.Time`，遇到不支持 seek 的格式会留在当前位置，不抛给调用方。
 
 ## 模拟后端

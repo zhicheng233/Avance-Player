@@ -21,7 +21,8 @@ public sealed class PlayerServices : IDisposable {
         LibraryRestorer libraryRestorer,
         LyricsService lyrics,
         SystemMediaService? systemMedia = null,
-        SystemMediaArtworkCache? systemMediaArtwork = null) {
+        SystemMediaArtworkCache? systemMediaArtwork = null,
+        FolderWatchService? folderWatch = null) {
         Playback = playback;
         StateStore = stateStore;
         StateSaver = stateSaver;
@@ -30,6 +31,7 @@ public sealed class PlayerServices : IDisposable {
         Lyrics = lyrics;
         SystemMedia = systemMedia ?? SystemMediaService.CreateNull();
         SystemMediaArtwork = systemMediaArtwork ?? new SystemMediaArtworkCache();
+        FolderWatch = folderWatch ?? new FolderWatchService();
     }
 
     public PlaybackService Playback { get; }
@@ -40,6 +42,9 @@ public sealed class PlayerServices : IDisposable {
     public LyricsService Lyrics { get; }
     public SystemMediaService SystemMedia { get; }
     public SystemMediaArtworkCache SystemMediaArtwork { get; }
+
+    /// <summary>盯着已导入的文件夹，有增删就触发重扫。</summary>
+    public FolderWatchService FolderWatch { get; }
 
     public static PlayerServices CreateDefault(string? statePath = null) {
         var lyrics = new LyricsService();
@@ -59,6 +64,7 @@ public sealed class PlayerServices : IDisposable {
         if (_disposed) return;
         _disposed = true;
         StateSaver.Dispose();
+        FolderWatch.Dispose();
         Playback.Dispose();
         SystemMedia.Dispose();
     }

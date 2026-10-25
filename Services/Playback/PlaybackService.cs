@@ -16,6 +16,13 @@ public sealed class PlaybackService : IDisposable {
     private EqualizerSettings _equalizer = EqualizerSettings.Flat;
     private bool _disposed;
 
+    // 重载媒体（音调/均衡器）之后，后端要过一会儿才把位置和播放状态报回来。
+    // 这段时间里再读快照只会拿到 0 秒 + 未播放，紧接着的第二次重载就会把播放掐掉。
+    // 记下上一次重载请求的位置和状态，作为短时间内的兜底。
+    private TimeSpan _reloadPosition;
+    private bool _reloadPlaying;
+    private DateTime _reloadGuardUntilUtc = DateTime.MinValue;
+
     public PlaybackService(IAudioBackend backend) {
         _backend = backend;
         _backend.Ended += Backend_Ended;
@@ -89,7 +96,8 @@ public sealed class PlaybackService : IDisposable {
 
     /// <summary>
     /// 应用音调同步和移调偏好。时间伸缩是原生 runtime 选项，开关时会在同一位置重载当前本地 media。
-    /// 手动移调只有后端真的支持时才重载。
+    /// 手动移调也是重载才生效：音调滤镜链写在 MediaPlayer 上，播放中的 aout 已经被 input 占着，
+    /// 只重建输出不会换链。
     /// </summary>
     public void SetPitch(double semitones, bool preservePitch) {
         var nextSemitones = Math.Clamp(semitones, -12, 12);
@@ -101,19 +109,64 @@ public sealed class PlaybackService : IDisposable {
         if (_disposed) return;
 
         _backend.SetPitch(_pitchSemitones, _preservePitch);
-        if (_session is not { Source.IsLocalFile: true } session
-            || (!syncChanged && !(pitchChanged && _backend.SupportsPitchShift))) {
-            return;
-        }
+        if (_session is not { Source.IsLocalFile: true } session) return;
 
-        var snapshot = _backend.Snapshot;
-        Start(session.Source, snapshot.Position, snapshot.IsPlaying);
+        // 没有移调能力的后端（模拟后端、缺插件的运行时）连重载都不用，
+        // 免得拖一下滑块就重启一次播放。
+        var needsReload = syncChanged || (pitchChanged && _backend.SupportsPitchShift);
+        if (!needsReload) return;
+
+        ReloadLocalSession(session);
     }
 
     public void SetEqualizer(EqualizerSettings settings) {
+        var changed = !EqualizerEqual(_equalizer, settings);
         _equalizer = settings;
         if (_disposed) return;
         _backend.SetEqualizer(_equalizer);
+
+        if (!changed) return;
+
+        // 均衡器是通过 audio-filter 变量塞进原生对象的，会整条覆盖滤镜链。
+        // 音调正在生效的时候，只有重载媒体才能把 scaletempo_pitch 重新接上。
+        if (!IsManualPitchActive) return;
+        if (_session is not { Source.IsLocalFile: true } session) return;
+
+        ReloadLocalSession(session);
+    }
+
+    /// <summary>
+    /// 在当前位置重载当前本地媒体。音调/均衡器各改一次就会各重载一次，
+    /// 后一次必须用前一次"准备放到哪"的位置，而不是后端还没追上来的 0 秒。
+    /// </summary>
+    private void ReloadLocalSession(PlaybackSession session) {
+        var (position, playing) = ResolveReloadTarget();
+        _reloadPosition = position;
+        _reloadPlaying = playing;
+        _reloadGuardUntilUtc = DateTime.UtcNow.AddMilliseconds(600);
+        Start(session.Source, position, playing);
+    }
+
+    /// <summary>快照还没跟上刚发起的重载时，沿用上次请求的位置和播放状态。</summary>
+    private (TimeSpan Position, bool Playing) ResolveReloadTarget() {
+        var snapshot = _backend.Snapshot;
+        var reloading = DateTime.UtcNow < _reloadGuardUntilUtc;
+        if (reloading && !snapshot.IsPlaying) return (_reloadPosition, _reloadPlaying);
+        return (snapshot.Position, snapshot.IsPlaying);
+    }
+
+    /// <summary>用户拖了音调，而且后端真能移调。</summary>
+    private bool IsManualPitchActive =>
+        _backend.SupportsPitchShift && Math.Abs(_pitchSemitones) > 0.001;
+
+    private static bool EqualizerEqual(EqualizerSettings left, EqualizerSettings right) {
+        if (ReferenceEquals(left, right)) return true;
+        if (left.BandLevels.Count != right.BandLevels.Count) return false;
+        for (var index = 0; index < left.BandLevels.Count; index++) {
+            if (Math.Abs(left.BandLevels[index] - right.BandLevels[index]) > 0.001) return false;
+        }
+
+        return true;
     }
 
     private void Backend_Ended(PlaybackEnded ended) {

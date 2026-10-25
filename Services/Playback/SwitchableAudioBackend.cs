@@ -60,7 +60,11 @@ public sealed class SwitchableAudioBackend : IAudioBackend {
         _simulated.SetPitch(semitones, preservePitch);
     }
 
-    public void SetEqualizer(EqualizerSettings settings) => _active?.SetEqualizer(settings);
+    public void SetEqualizer(EqualizerSettings settings) {
+        // 后端自己的 Load 会重新应用保存的设置，所以两个都存一份。
+        _local.SetEqualizer(settings);
+        _simulated.SetEqualizer(settings);
+    }
 
     public PlaybackSnapshot Snapshot => _active?.Snapshot
         ?? new PlaybackSnapshot(false, TimeSpan.Zero, TimeSpan.Zero, false);

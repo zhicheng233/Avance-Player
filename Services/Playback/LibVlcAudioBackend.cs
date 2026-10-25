@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using LibVLCSharp.Shared;
 
@@ -23,6 +24,7 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
     private bool _preservePitch = true;
     private string[]? _appliedRuntimeOptions;
     private EqualizerSettings _equalizer = EqualizerSettings.Flat;
+    private bool? _supportsPitchShift;
     private TimeSpan? _pendingStart;
     private bool _hasStarted;
     private bool _disposed;
@@ -48,9 +50,35 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
         }
     }
 
-    // libvlc 3 的公开 API 里没有音频滤镜链，所以本地文件没法手动移调。
-    // 时间伸缩（音调同步）是支持的。
-    public bool SupportsPitchShift => false;
+    // libvlc 3 的公开 API 里没有音频滤镜链，所以只能在 MediaPlayer 的原生对象上
+    // 写 audio-filter 和 pitch-shift 两个变量，再重建音频输出来生效。
+    // 符号取不到（或者运行时没带 scaletempo_pitch）就退回“不支持”，UI 会照实说明。
+    public bool SupportsPitchShift {
+        get {
+            if (_supportsPitchShift is { } cached) return cached;
+            var supported = ProbePitchShift();
+            _supportsPitchShift = supported;
+            return supported;
+        }
+    }
+
+    /// <summary>用户拖了音调、后端也确实能移调。</summary>
+    public bool IsManualPitchActive => SupportsPitchShift && Math.Abs(_pitchSemitones) > 0.001;
+
+    private bool ProbePitchShift() {
+        if (!LibVlcNative.IsAvailable) return false;
+
+        try {
+            var libVlc = _runtime.TryGet(out _);
+            if (libVlc is null) return false;
+            // 运行时没带 scaletempo_pitch 插件的话，滤镜链里点名它只会报错退出。
+            return libVlc.AudioFilters.Any(module =>
+                string.Equals(module.Name, LibVlcNative.PitchFilterModule, StringComparison.Ordinal));
+        }
+        catch (Exception) {
+            return false;
+        }
+    }
 
     public event Action<PlaybackEnded>? Ended;
     public event Action<PlaybackFailure>? Failed;
@@ -175,6 +203,7 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
                 : null;
             player.Volume = (int)Math.Round(Math.Clamp(_volume, 0, 1) * 100);
             TrySetRate(player, (float)_rate);
+            // 均衡器会把 audio-filter 覆盖成 "equalizer"，音调链在它内部之后补回去。
             ApplyEqualizerLocked(player);
         }
 
@@ -301,7 +330,8 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
 
     public void SetPitch(double semitones, bool preservePitch) {
         lock (_sync) {
-            // 留着，万一以后的原生运行时能移调，还用同一个接口。
+            // 这里只记下偏好；真正写进原生对象是在下次 Load（也就是上一层的重载）里。
+            // 播放中只重建 aout 不会让音调生效，aout 已经被 input 占着。
             _pitchSemitones = Math.Clamp(semitones, -12, 12);
             _preservePitch = preservePitch;
         }
@@ -314,8 +344,9 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
             options.Add("--no-audio-time-stretch");
         }
 
-        // libvlc 3 没有音频滤镜/移调 API，所以半音偏移只是存着，等以后有后端能应用；
-        // 不会当成 media 选项传进去（传了也会被静默忽略）。
+        // 音调链走 MediaPlayer 的 audio-filter 变量，不在这里当全局选项传：
+        // libvlc_media_player_new 用不带 DOINHERIT 的 VLC_VAR_STRING 建了自己的 audio-filter，
+        // 会遮住全局 --audio-filter，传了也没用。
         return options.ToArray();
     }
 
@@ -329,10 +360,22 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
 
     public void SetEqualizer(EqualizerSettings settings) {
         lock (_sync) {
+            var changed = !EqualizerEqual(_equalizer, settings);
             _equalizer = settings;
+            if (!changed) return;
             if (_disposed || _mediaPlayer is null) return;
             ApplyEqualizerLocked(_mediaPlayer);
         }
+    }
+
+    private static bool EqualizerEqual(EqualizerSettings left, EqualizerSettings right) {
+        if (ReferenceEquals(left, right)) return true;
+        if (left.BandLevels.Count != right.BandLevels.Count) return false;
+        for (var index = 0; index < left.BandLevels.Count; index++) {
+            if (Math.Abs(left.BandLevels[index] - right.BandLevels[index]) > 0.001) return false;
+        }
+
+        return true;
     }
 
     public PlaybackSnapshot Snapshot {
@@ -393,17 +436,83 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
         try {
             if (BuildEqualizer(_equalizer) is not { } equalizer) {
                 player.UnsetEqualizer();
-                return;
             }
-
-            using (equalizer) {
-                player.SetEqualizer(equalizer);
+            else {
+                using (equalizer) {
+                    player.SetEqualizer(equalizer);
+                }
             }
         }
         catch (Exception) {
             // 原生运行时可能比均衡器 API 老；播放还是能用的。
         }
+
+        // SetEqualizer/UnsetEqualizer 会把 audio-filter 整条覆盖掉，音调链得在原样补回去。
+        ApplyFilterChainLocked(player);
     }
+
+    /// <summary>
+    /// 把音调滤镜接进 MediaPlayer 的音频滤镜链。
+    /// libvlc 3 没给滤镜链的公开入口，只能拿原生对象写 audio-filter / pitch-shift，
+    /// 再重建一次音频输出（SetAudioFormat）让新 aout 继承这两个变量。
+    /// 这一步必须在 <see cref="ApplyEqualizerLocked"/> 之后：均衡器会把 audio-filter 覆盖成 "equalizer"。
+    /// </summary>
+    private void ApplyFilterChainLocked(MediaPlayer player) {
+        if (!SupportsPitchShift) return;
+
+        try {
+            var native = player.NativeReference;
+            if (native == IntPtr.Zero) return;
+
+            // 每次都重写：均衡器会把这个变量改成 "equalizer"，缓存住反而会漏掉恢复。
+            if (LibVlcNative.SetString(native, "audio-filter", BuildFilterChain(IsManualPitchActive)) != 0) return;
+            if (!IsManualPitchActive) return;
+
+            // var_Create 必须先于 var_Set，否则拿到的只是 VLC_ENOVAR。
+            LibVlcNative.Create(native, "pitch-shift", LibVlcNative.PitchShiftVarType);
+            if (LibVlcNative.SetFloat(native, "pitch-shift", (float)_pitchSemitones) != 0) return;
+
+            // 重建 aout，让新音频输出继承上面的两个变量。
+            // 正在播的那次调用不会立刻换；重载后的这次就会直接用新链。
+            player.SetAudioFormat("S16N", 0, 0);
+        }
+        catch (Exception) {
+            // 原生变量名或结构跟预期不一样：宁可没音调，也别把播放搞崩。
+        }
+    }
+
+    /// <summary>
+    /// 滤镜名之间用空格分隔。逗号是模块回退链的写法，不是滤镜链分隔符。
+    /// </summary>
+    private string BuildFilterChain(bool includePitch) {
+        var hasEqualizer = HasEqualizerShape(_equalizer);
+        if (hasEqualizer && includePitch) return "equalizer scaletempo_pitch";
+        if (hasEqualizer) return "equalizer";
+        return includePitch ? "scaletempo_pitch" : string.Empty;
+    }
+
+    /// <summary>五个频段都停在 0.5 就是平直，后端整条旁路。</summary>
+    private static bool HasEqualizerShape(EqualizerSettings settings) {
+        var levels = settings.BandLevels;
+        if (levels.Count == 0) return false;
+        for (var index = 0; index < levels.Count; index++) {
+            if (Math.Abs(levels[index] - 0.5) > 0.001) return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 相邻频段会互相叠加，写在均衡器上的 dB 值和实际输出峰值之间差这一点。
+    /// 实测三个预设（31 Hz / 1 kHz 单频、满幅输入）多出 0.4～0.8 dB，按最坏值取。
+    /// </summary>
+    private const double BandOverlapDb = 0.8;
+
+    /// <summary>
+    /// 均衡器曲线允许比单位增益高出多少 dB 才从 preamp 里扣回来。
+    /// 实测满幅正弦下，净峰值到 +3 dB 时是 97.9% FS，再高就开始削顶。
+    /// </summary>
+    private const double MaxPeakBoostDb = 3.0;
 
     /// <summary>
     /// 把 UI 上五个归一化频段映射到 LibVLC 原生十段。UI 频率按对数插值，
@@ -411,16 +520,7 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
     /// </summary>
     private static Equalizer? BuildEqualizer(EqualizerSettings settings) {
         var levels = settings.BandLevels;
-        if (levels.Count == 0) return null;
-
-        var changed = false;
-        for (var index = 0; index < levels.Count; index++) {
-            if (Math.Abs(levels[index] - 0.5) > 0.001) {
-                changed = true;
-                break;
-            }
-        }
-        if (!changed) return null;
+        if (!HasEqualizerShape(settings)) return null;
 
         var equalizer = new Equalizer();
         try {
@@ -442,13 +542,26 @@ public sealed class LibVlcAudioBackend : IAudioBackend {
                 sum += amp;
             }
 
+            // 先按曲线平均值归零，保证整条曲线"有抬有压"，换预设不会整体变大声或变小声。
             var average = sum / bandCount;
+            var maxBoost = double.NegativeInfinity;
             for (uint band = 0; band < bandCount; band++) {
                 var compensated = Math.Clamp(amps[band] - average, -12.0, 6.0);
+                maxBoost = Math.Max(maxBoost, compensated);
                 equalizer.SetAmp((float)compensated, band);
             }
 
-            equalizer.SetPreamp(0);
+            // LibVLC 的均衡器内部有个 EQZ_IN_FACTOR（0.25）：每条频段都按 1/4 混回干声，
+            // 所以 0 dB 频段 + 0 dB preamp 其实比直通小 12 dB，非 Flat 预设听上去就"变小了"。
+            // 补一个 +12 dB 正好抬回单位增益；LibVLC 自己的 equalizer-preamp 默认值也是 12。
+            //
+            // 但只补单位增益还不够：Bass 这类预设最响的一段是 +5.7 dB，遇到本来就录到 0 dBFS 的
+            // 母带会直接削顶（实测 31 Hz 满幅输入能削掉一半采样）。所以按"最响频段 + 相邻叠加"
+            // 估算真实峰值，只让它在单位增益之上留 3 dB，多出来的从 preamp 里扣回去。
+            // 这样 Bass 预设不会再削顶，Warm 这种本来就温和的预设则完全不动（仍是 +12）。
+            var peakDb = maxBoost + BandOverlapDb;
+            var overUnity = Math.Max(0, peakDb - MaxPeakBoostDb);
+            equalizer.SetPreamp((float)(12.0 - overUnity));
             return equalizer;
         }
         catch {
