@@ -1,0 +1,193 @@
+---
+title: "Avance Player · 模型与视图模型"
+config:
+  layout: elk
+---
+classDiagram
+    direction LR
+
+    class Music {
+        +string Title
+        +string Artist
+        +string Album
+        +string Genre
+        +string ArtworkColor
+        +TimeSpan Duration
+        +string FilePath
+        +bool IsLocalFile
+        +bool HasPlayableFile
+        +Bitmap Artwork
+        +string ArtworkPath
+        +string ArtworkAccentColor
+        +string ArtworkSecondaryColor
+        +string ArtworkBackgroundColor
+        +int BitrateKbps
+        +string LocalQualityLabel
+        +IReadOnlyList~LyricLine~ Lyrics
+        +LyricsFormat LyricsFormat
+        +string LyricsSourcePath
+        +bool HasManualLyrics
+        +bool IsCurrent
+    }
+    class Playlist {
+        +string Name
+        +ObservableCollection~Music~ Tracks
+        +List~string~ FolderRoots
+    }
+    class LyricLine {
+        +TimeSpan Timestamp
+        +TimeSpan End
+        +string Text
+        +string Translation
+        +string Romanization
+        +IReadOnlyList~LyricWord~ Words
+        +bool HasWordTiming
+        +bool IsCurrent
+        +int CurrentWordIndex
+    }
+    class LyricWord {
+        +string Text
+        +TimeSpan Start
+        +TimeSpan End
+        +TimeSpan Duration
+    }
+    class LyricsDocument {
+        +LyricsFormat Format
+        +IReadOnlyList~LyricLine~ Lines
+        +string Title
+        +string Artist
+        +string Album
+        +TimeSpan Offset
+        +IReadOnlyList~string~ Warnings
+        +bool HasWordTiming
+    }
+    class LyricsFormat {
+        <<enumeration>>
+        Lrc
+        Srt
+        Ass
+        Ttml
+        Lys
+        Qrc
+        Krc
+        Yrc
+    }
+
+    class MainWindowViewModel {
+        +ObservableCollection~Music~ Tracks
+        +ObservableCollection~Playlist~ Playlists
+        +ObservableCollection~Music~ PlaybackQueue
+        +ObservableCollection~Music~ RecentTracks
+        +Music CurrentTrack
+        +Playlist SelectedPlaylist
+        +PageViewModel CurrentPage
+        +LocalizedText Text
+        +MonetPalette Palette
+        +bool IsLyricsMode
+        +bool IsPlaying
+        +bool IsShuffleMode
+        +RepeatMode RepeatMode
+        +double Volume
+        +double CurrentPositionSeconds
+        +double PlaybackSpeed
+        +int EqualizerPresetIndex
+        +int CurrentLyricIndex
+        +Task InitializeAsync()
+        +Task RefreshFolderAsync(string)
+        +Task LoadLyricsFromFileAsync(string)
+        +void ApplyLyrics(LyricsDocument, string, bool)
+        +void BeginSeek()
+        +void CommitSeek(double)
+        +void SaveStateNow()
+        +event RaiseRequested
+        +event QuitRequested
+    }
+    class RepeatMode {
+        <<enumeration>>
+        Off
+        Track
+        Playlist
+    }
+    class PageViewModel {
+        <<abstract>>
+        +string Title
+        +string Subtitle
+    }
+    class LibraryPageViewModel {
+        +ObservableCollection~Music~ Tracks
+    }
+    class CategoryBrowsePageViewModel {
+        +ObservableCollection~CategoryGroupViewModel~ Groups
+        +bool IsEmpty
+    }
+    class CategoryGroupViewModel {
+        +string Title
+        +string ArtworkColor
+        +IReadOnlyList~Music~ Tracks
+    }
+    class TrackCollectionPageViewModel {
+        +IReadOnlyList~Music~ Tracks
+        +bool IsEmpty
+    }
+    class PlaylistsPageViewModel {
+        +ObservableCollection~Playlist~ Playlists
+    }
+    class PlaylistDetailPageViewModel {
+        +Playlist Playlist
+        +ObservableCollection~Music~ Library
+        +bool IsEmpty
+        +void NotifyTracksChanged()
+    }
+    class PlaybackOptionViewModel {
+        +string Label
+        +int Index
+        +bool IsSelected
+    }
+    class EqualizerBandViewModel {
+        +string Frequency
+        +double Level
+    }
+    class RelayCommand {
+        +bool CanExecute(object)
+        +void Execute(object)
+        +event CanExecuteChanged
+    }
+    class INotifyPropertyChanged {
+        <<interface>>
+    }
+    class ICommand {
+        <<interface>>
+    }
+
+    Music "1" o-- "0..*" LyricLine : lyrics
+    LyricLine "1" o-- "0..*" LyricWord : words
+    LyricsDocument "1" o-- "1..*" LyricLine : lines
+    LyricsDocument --> LyricsFormat
+    Music --> LyricsFormat
+    Playlist "1" o-- "0..*" Music : tracks
+
+    PageViewModel <|-- LibraryPageViewModel
+    PageViewModel <|-- CategoryBrowsePageViewModel
+    PageViewModel <|-- TrackCollectionPageViewModel
+    PageViewModel <|-- PlaylistsPageViewModel
+    PageViewModel <|-- PlaylistDetailPageViewModel
+
+    MainWindowViewModel --> RepeatMode
+    MainWindowViewModel "1" o-- "1" PageViewModel : currentPage
+    MainWindowViewModel "1" o-- "0..*" RelayCommand : commands
+    MainWindowViewModel "1" o-- "0..*" EqualizerBandViewModel : bands
+    MainWindowViewModel "1" o-- "0..*" PlaybackOptionViewModel : options
+    MainWindowViewModel "1" o-- "0..*" Music
+    MainWindowViewModel "1" o-- "0..*" Playlist
+    CategoryBrowsePageViewModel "1" o-- "0..*" CategoryGroupViewModel : groups
+    CategoryGroupViewModel "1" o-- "0..*" Music : tracks
+    PlaylistDetailPageViewModel --> Playlist : edits
+
+    INotifyPropertyChanged <|.. Music
+    INotifyPropertyChanged <|.. Playlist
+    INotifyPropertyChanged <|.. LyricLine
+    INotifyPropertyChanged <|.. MainWindowViewModel
+    INotifyPropertyChanged <|.. PlaybackOptionViewModel
+    INotifyPropertyChanged <|.. EqualizerBandViewModel
+    INotifyPropertyChanged <|.. PlaylistDetailPageViewModel
+    ICommand <|.. RelayCommand

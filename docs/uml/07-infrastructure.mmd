@@ -1,0 +1,102 @@
+---
+title: "Avance Player · 基础设施（本地化、配色、快捷键、转换器）"
+config:
+  layout: elk
+---
+classDiagram
+    direction LR
+
+    class PlaybackDiagnostics {
+        <<static>>
+        +$int Run()
+    }
+    class Program {
+        <<static>>
+        +$int Main(string[] args)
+    }
+
+    class GlobalHotkeyService {
+        +volatile bool AppIsActive
+        +bool IsRunning
+        +void Start()
+        +void Stop()
+    }
+    class GlobalHotkeyAction {
+        <<enumeration>>
+        TogglePlayback
+        PreviousTrack
+        NextTrack
+        VolumeUp
+        VolumeDown
+    }
+    class SimpleGlobalHook {
+        <<external>>
+    }
+
+    class LocalizedText {
+        +string this[string key]
+        +string LanguageName
+        +string CultureName
+        +void ToggleLanguage()
+        +void SetCulture(string)
+        +string Format(string, params object[])
+    }
+    class INotifyPropertyChanged {
+        <<interface>>
+    }
+
+    class MonetPaletteService {
+        <<static>>
+        +$MonetPalette FromColorSeed(string seed)
+    }
+    class MonetPalette {
+        <<record>>
+        +string WindowBackground
+        +string SidebarSurface
+        +string IslandSurface
+        +string Accent
+        +string AccentSecondary
+        +string Foreground
+        +string MutedForeground
+    }
+    class ArtworkPaletteExtractor {
+        <<static>>
+        +$ArtworkPalette Extract(Bitmap artwork)
+    }
+    class ArtworkPalette {
+        <<record>>
+        +string DominantColor
+        +string AccentColor
+        +string SecondaryColor
+        +string BackgroundColor
+    }
+    class LocalFolderScanner {
+        <<external>>
+    }
+
+    class IValueConverter {
+        <<interface>>
+    }
+    class ArtworkColorConverter {
+        +object Convert(...)
+    }
+    class CountToBoolConverter {
+        +bool Invert
+        +object Convert(...)
+    }
+    class LevelHeightConverter {
+        +object Convert(...)
+    }
+
+    GlobalHotkeyService o-- SimpleGlobalHook
+    GlobalHotkeyService --> GlobalHotkeyAction : dispatches
+    Program ..> PlaybackDiagnostics : --diagnostics
+
+    INotifyPropertyChanged <|.. LocalizedText
+    MonetPaletteService ..> MonetPalette : produces
+    ArtworkPaletteExtractor ..> ArtworkPalette : produces
+    LocalFolderScanner ..> ArtworkPaletteExtractor : samples cover
+
+    IValueConverter <|.. ArtworkColorConverter
+    IValueConverter <|.. CountToBoolConverter
+    IValueConverter <|.. LevelHeightConverter

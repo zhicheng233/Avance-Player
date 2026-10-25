@@ -1,0 +1,105 @@
+---
+title: "Avance Player · 系统媒体集成"
+config:
+  layout: elk
+---
+classDiagram
+    direction LR
+
+    class SystemMediaService {
+        +bool IsAvailable
+        +event CommandReceived
+        +void Update(SystemMediaSnapshot)
+        +void Clear()
+        +$SystemMediaService CreateNull()
+        +$SystemMediaService CreateDefault()
+    }
+
+    class ISystemMediaBackend {
+        <<interface>>
+        +bool IsAvailable
+        +event CommandReceived
+        +void Update(SystemMediaSnapshot)
+        +void Clear()
+    }
+
+    class LinuxMprisSystemMediaBackend
+    class WindowsSmtcSystemMediaBackend
+    class MacNowPlayingSystemMediaBackend
+    class NullSystemMediaBackend {
+        <<private nested>>
+        +bool IsAvailable
+    }
+    class MacNowPlayingNative {
+        <<static P/Invoke>>
+    }
+
+    class SystemMediaArtworkCache {
+        +string Resolve(Music track)
+    }
+    class Music {
+        <<external>>
+    }
+
+    class SystemMediaSnapshot {
+        <<record>>
+        +string Title
+        +string Artist
+        +string Album
+        +TimeSpan Duration
+        +string ArtworkPath
+        +string SourcePath
+        +bool IsPlaying
+        +TimeSpan Position
+        +double Volume
+        +bool IsShuffle
+        +SystemMediaRepeatMode RepeatMode
+        +double Rate
+    }
+
+    class SystemMediaCommand {
+        <<record>>
+        +SystemMediaCommandKind Kind
+        +TimeSpan Position
+        +double Number
+        +bool Flag
+        +SystemMediaRepeatMode Repeat
+    }
+
+    class SystemMediaCommandKind {
+        <<enumeration>>
+        Play
+        Pause
+        TogglePlayPause
+        Stop
+        Next
+        Previous
+        Seek
+        Shuffle
+        Repeat
+        Volume
+        Raise
+        Quit
+    }
+
+    class SystemMediaRepeatMode {
+        <<enumeration>>
+        Off
+        Track
+        Playlist
+    }
+
+    SystemMediaService o-- ISystemMediaBackend : wraps
+    SystemMediaService *-- NullSystemMediaBackend : fallback
+    ISystemMediaBackend <|.. LinuxMprisSystemMediaBackend
+    ISystemMediaBackend <|.. WindowsSmtcSystemMediaBackend
+    ISystemMediaBackend <|.. MacNowPlayingSystemMediaBackend
+    ISystemMediaBackend <|.. NullSystemMediaBackend
+    MacNowPlayingSystemMediaBackend ..> MacNowPlayingNative
+
+    ISystemMediaBackend ..> SystemMediaSnapshot : Update
+    ISystemMediaBackend ..> SystemMediaCommand : emits
+    SystemMediaCommand --> SystemMediaCommandKind
+    SystemMediaCommand --> SystemMediaRepeatMode
+    SystemMediaSnapshot --> SystemMediaRepeatMode
+    SystemMediaArtworkCache ..> Music : readable cover path

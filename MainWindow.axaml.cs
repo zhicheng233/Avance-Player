@@ -20,6 +20,13 @@ namespace Avance_Player;
 public partial class MainWindow : Window {
     private static readonly TimeSpan LyricScrollDuration = TimeSpan.FromMilliseconds(460);
     private static readonly long SongRowDoubleTapTicks = (long)(Stopwatch.Frequency * 0.45);
+    private const int RetryCenterAttempts = 6;
+
+    /// <summary>
+    /// 补列表上下 padding 的重试次数。刚进歌词页时第一行的容器还没量出高度，
+    /// 那一帧算不出 padding，得等布局在下面几帧里跑完。
+    /// </summary>
+    private const int LyricPaddingRetryAttempts = 12;
 
     private WindowState _windowStateBeforeFullscreen = WindowState.Normal;
     private MainWindowViewModel? _viewModel;
@@ -29,6 +36,7 @@ public partial class MainWindow : Window {
     private double _lyricScrollFrom;
     private double _lyricScrollTo;
     private DateTime _lyricScrollStarted;
+    private int _lyricScrollGeneration;
     private Music? _lastTappedTrack;
     private long _lastTapTimestamp;
     private long _lastRowPlaybackTimestamp;
@@ -39,6 +47,9 @@ public partial class MainWindow : Window {
     private NativeMenuItem? _trayPlayPauseItem;
     private DispatcherTimer? _seekRepeatTimer;
     private int _seekDirection;
+
+    // 空格是否还按着：用来吃掉系统的按键自动重复，避免播放状态被连翻。
+    private bool _spaceHeld;
     private DateTime _seekStartedUtc;
     private long _lastVolumeStepTimestamp;
     private bool _quitRequested;
@@ -75,7 +86,7 @@ public partial class MainWindow : Window {
         SizeChanged += (_, _) => {
             UpdateCompactLayout();
             if (_viewModel?.IsLyricsMode == true)
-                Dispatcher.UIThread.Post(ScrollActiveLyric, DispatcherPriority.Background);
+                RequestLyricScroll();
         };
         Opened += async (_, _) => {
             UpdateCompactLayout();
@@ -212,10 +223,20 @@ public partial class MainWindow : Window {
         }
 
         if (e.PropertyName == nameof(MainWindowViewModel.CurrentLyricIndex)
-            || e.PropertyName == nameof(MainWindowViewModel.CurrentTrack)
             || (e.PropertyName == nameof(MainWindowViewModel.IsLyricsMode) && _viewModel?.IsLyricsMode == true)) {
-            Dispatcher.UIThread.Post(ScrollActiveLyric, DispatcherPriority.Background);
+            RequestLyricScroll();
         }
+        else if (e.PropertyName == nameof(MainWindowViewModel.CurrentTrack)) {
+            // 切歌：上一首的滚动动画和排队的居中请求全部作废，再从新歌的第一行重新算。
+            CancelLyricScroll();
+            RequestLyricScroll();
+        }
+    }
+
+    /// <summary>作废所有在途的滚动请求，并停掉正在跑的滚动动画。</summary>
+    private void CancelLyricScroll() {
+        _lyricScrollGeneration++;
+        StopLyricScroll();
     }
 
     private void SyncFloatingLyricsWindow() {
@@ -224,6 +245,8 @@ public partial class MainWindow : Window {
             if (_floatingLyricsWindow is null) {
                 _floatingLyricsWindow = new FloatingLyricsWindow { DataContext = _viewModel };
                 _floatingLyricsWindow.Closed += (_, _) => _floatingLyricsWindow = null;
+                // 窗口按内容自适应高度，切歌/歌词行出现或消失时高度会变，跟着重新贴底。
+                _floatingLyricsWindow.ContentSizeChanged += (_, _) => PositionFloatingLyricsWindow();
             }
 
             PositionFloatingLyricsWindow();
@@ -239,9 +262,14 @@ public partial class MainWindow : Window {
         var screen = Screens.ScreenFromWindow(this) ?? Screens.Primary;
         if (screen is null) return;
         var area = screen.WorkingArea;
+        // 窗口高度随内容走（没有歌词行时更矮），所以每次都按当前实际高度重新贴底，
+        // 不能用固定的设计高度，否则内容变多变少后会飘。
+        var height = _floatingLyricsWindow.Bounds.Height;
+        if (!double.IsFinite(height) || height <= 1) height = _floatingLyricsWindow.Height;
+        if (!double.IsFinite(height) || height <= 1) height = 120;
         _floatingLyricsWindow.Position = new PixelPoint(
             area.X + area.Width - (int)_floatingLyricsWindow.Width - 32,
-            area.Y + area.Height - (int)_floatingLyricsWindow.Height - 40);
+            area.Y + area.Height - (int)Math.Round(height) - 40);
     }
 
     private void MainWindow_PreviewKeyDown(object? sender, KeyEventArgs e) {
@@ -277,6 +305,15 @@ public partial class MainWindow : Window {
         }
 
         if (e.Key == Key.Space && !control && !alt && !meta) {
+            // 按住空格时系统会不停补发 KeyDown，每一下都会把播放状态翻一次，
+            // 松手那一刻落在哪个状态全看运气——表现出来就是"暂停了又自己接着放"。
+            // 这里只认按下后的第一下，等 KeyUp 才重新放行。方向键的自动重复是故意保留的。
+            if (_spaceHeld) {
+                e.Handled = true;
+                return;
+            }
+
+            _spaceHeld = true;
             _viewModel.TogglePlaybackCommand.Execute(null);
             e.Handled = true;
             return;
@@ -305,6 +342,8 @@ public partial class MainWindow : Window {
     }
 
     private void MainWindow_PreviewKeyUp(object? sender, KeyEventArgs e) {
+        // 空格松手才允许下一次切换，避免自动重复连着翻状态。
+        if (e.Key == Key.Space) _spaceHeld = false;
         if (e.Key is Key.Left or Key.Right) StopSeekRepeat();
     }
 
@@ -579,53 +618,138 @@ public partial class MainWindow : Window {
         await _viewModel.ImportFolderToPlaylistAsync(playlist, path);
     }
 
-    private void ScrollActiveLyric() {
-        if (_viewModel is null || !_viewModel.IsLyricsMode || _viewModel.CurrentLyricIndex < 0) return;
-        var lyricsList = this.GetVisualDescendants()
-            .OfType<ItemsControl>()
-            .FirstOrDefault(control => control.Name == "LyricsList");
-        if (lyricsList is null) return;
+    private void RequestLyricScroll() {
+        if (_viewModel is null || !_viewModel.IsLyricsMode) return;
+        var lyricsList = FindLyricsList();
+        if (lyricsList is null) {
+            // 歌词页刚切进来时视图可能还没挂到可视树，这时拿不到列表。
+            // 别把请求丢掉，等布局跑一轮再试，否则第一行会一直顶在最上面。
+            RetryRequestLyricScroll(++_lyricScrollGeneration, LyricPaddingRetryAttempts);
+            return;
+        }
 
+        // 每次请求都换一代令牌。旧代里排队的后台回调看到令牌不对就直接放弃，
+        // 免得切歌时上一首的滚动把新歌的位置又拽回去。
+        var generation = ++_lyricScrollGeneration;
+        Dispatcher.UIThread.Post(
+            () => ApplyLyricScroll(lyricsList, generation, LyricPaddingRetryAttempts),
+            DispatcherPriority.Background);
+    }
+
+    private ItemsControl? FindLyricsList() => this.GetVisualDescendants()
+        .OfType<ItemsControl>()
+        .FirstOrDefault(control => control.Name == "LyricsList");
+
+    /// <summary>
+    /// 视图还没挂进可视树时的补救：按帧重试找列表，找到就接着走正常的居中流程。
+    /// </summary>
+    private void RetryRequestLyricScroll(int generation, int attemptsLeft) {
+        if (attemptsLeft <= 0) return;
         Dispatcher.UIThread.Post(() => {
-            UpdateLyricListPadding(lyricsList);
-            // 改 padding 会让布局失效；等第二轮后台排版再居中，读到的才是新容器位置，
-            // 不是改 padding 前的。
-            Dispatcher.UIThread.Post(() => CenterActiveLyric(lyricsList, _viewModel.CurrentLyricIndex),
-                DispatcherPriority.Background);
+            if (generation != _lyricScrollGeneration || _viewModel?.IsLyricsMode != true) return;
+
+            if (FindLyricsList() is not { } lyricsList) {
+                RetryRequestLyricScroll(generation, attemptsLeft - 1);
+                return;
+            }
+
+            ApplyLyricScroll(lyricsList, generation, LyricPaddingRetryAttempts);
+        }, DispatcherPriority.Background);
+    }
+
+    /// <summary>
+    /// 先补上下 padding，再居中。<paramref name="paddingAttemptsLeft"/> 是留给"容器还没量出高度"的重试次数：
+    /// 刚进歌词页、刚切歌时第一行的容器还没有 Bounds，这时算不出 padding，
+    /// 而 0 padding 下 ScrollViewer 的 offset 被夹在 0，第一行就永远顶在最上面。
+    /// </summary>
+    private void ApplyLyricScroll(ItemsControl lyricsList, int generation, int paddingAttemptsLeft) {
+        if (generation != _lyricScrollGeneration) return;
+
+        var paddingReady = UpdateLyricListPadding(lyricsList);
+        // 改 padding 会让布局失效；等下一轮后台排版再居中，读到的才是新容器位置。
+        Dispatcher.UIThread.Post(() => {
+            if (generation != _lyricScrollGeneration) return;
+
+            if (paddingReady) {
+                CenterActiveLyric(lyricsList, _viewModel?.CurrentLyricIndex ?? -1);
+                return;
+            }
+
+            if (paddingAttemptsLeft <= 0) return;
+            ApplyLyricScroll(lyricsList, generation, paddingAttemptsLeft - 1);
         }, DispatcherPriority.Background);
     }
 
     /// <summary>
     /// ScrollViewer 的 offset 卡在 0/max，不加 padding 的话第一行和最后一行永远到不了垂直中心。
     /// 第一项上面、最后一项下面各留半屏，每行才有一样的居中范围。
+    /// 返回 false 表示这一帧还算不出来（容器没就绪），调用方应该重试。
     /// </summary>
-    private static void UpdateLyricListPadding(ItemsControl lyricsList) {
+    private static bool UpdateLyricListPadding(ItemsControl lyricsList) {
         var panel = lyricsList.ItemsPanelRoot;
         var scrollViewer = lyricsList.GetVisualAncestors().OfType<ScrollViewer>().FirstOrDefault();
-        if (panel is null || scrollViewer is null || scrollViewer.Viewport.Height <= 0 || lyricsList.ItemCount == 0) return;
+        if (panel is null || scrollViewer is null || scrollViewer.Viewport.Height <= 0 || lyricsList.ItemCount == 0) {
+            return false;
+        }
 
         var first = lyricsList.ContainerFromIndex(0) as Control;
         var last = lyricsList.ContainerFromIndex(lyricsList.ItemCount - 1) as Control;
-        if (first is null || last is null || first.Bounds.Height <= 0 || last.Bounds.Height <= 0) return;
+        if (first is null || last is null || first.Bounds.Height <= 0 || last.Bounds.Height <= 0) {
+            return false;
+        }
 
         var top = Math.Max(0, (scrollViewer.Viewport.Height - first.Bounds.Height) / 2);
         var bottom = Math.Max(0, (scrollViewer.Viewport.Height - last.Bounds.Height) / 2);
         var margin = new Thickness(0, top, 0, bottom);
         if (panel.Margin != margin) panel.Margin = margin;
+        return true;
     }
 
+    /// <summary>
+    /// 把当前行滚到垂直中心。<paramref name="index"/> 为负（还没唱到第一行）时回到顶部，
+    /// 原来是直接 return，切歌后列表就停在上一首的位置不动。
+    /// </summary>
     private void CenterActiveLyric(ItemsControl lyricsList, int index) {
         if (_viewModel?.IsLyricsMode != true) return;
-        var container = lyricsList.ContainerFromIndex(index);
         var scrollViewer = lyricsList.GetVisualAncestors().OfType<ScrollViewer>().FirstOrDefault();
-        if (container is null || scrollViewer is null) return;
+        if (scrollViewer is null) return;
+
+        if (index < 0) {
+            StartLyricScroll(scrollViewer, 0);
+            return;
+        }
+
+        var container = lyricsList.ContainerFromIndex(index);
+        if (container is null) {
+            // 虚拟化还没把这一行的容器造出来。下几帧再试，别把这次的居中丢掉。
+            RetryCenterActiveLyric(lyricsList, index, RetryCenterAttempts);
+            return;
+        }
 
         var position = container.TranslatePoint(new Point(0, 0), scrollViewer);
-        if (position is null) return;
+        if (position is null) {
+            RetryCenterActiveLyric(lyricsList, index, RetryCenterAttempts);
+            return;
+        }
 
         var centeredOffset = scrollViewer.Offset.Y + position.Value.Y -
                              (scrollViewer.Viewport.Height - container.Bounds.Height) / 2;
         StartLyricScroll(scrollViewer, Math.Max(0, centeredOffset));
+    }
+
+    /// <summary>容器还没就绪时按帧重试；超过次数就认了，反正下一行一定会再来一次请求。</summary>
+    private void RetryCenterActiveLyric(ItemsControl lyricsList, int index, int attemptsLeft) {
+        if (attemptsLeft <= 0) return;
+        var generation = _lyricScrollGeneration;
+        Dispatcher.UIThread.Post(() => {
+            if (generation != _lyricScrollGeneration || _viewModel?.IsLyricsMode != true) return;
+            if (lyricsList.ContainerFromIndex(index) is not Control) {
+                RetryCenterActiveLyric(lyricsList, index, attemptsLeft - 1);
+                return;
+            }
+
+            CenterActiveLyric(lyricsList, index);
+        }, DispatcherPriority.Background);
     }
 
     private void StartLyricScroll(ScrollViewer scrollViewer, double targetOffset) {

@@ -1,0 +1,165 @@
+---
+title: "Avance Player · 外壳窗口与自绘控件"
+config:
+  layout: elk
+---
+classDiagram
+    direction LR
+
+    class Application {
+        <<external>>
+    }
+    class Window {
+        <<external>>
+    }
+    class UserControl {
+        <<external>>
+    }
+    class Control {
+        <<external>>
+    }
+    class TemplatedControl {
+        <<external>>
+    }
+    class TextBlock {
+        <<external>>
+    }
+    class IPageTransition {
+        <<interface>>
+    }
+    class TrayIcon {
+        <<external>>
+    }
+    class SimpleGlobalHook {
+        <<external>>
+    }
+
+    class Program {
+        <<static>>
+        +$int Main(string[] args)
+        +$AppBuilder BuildAvaloniaApp()
+    }
+    class App {
+        +void Initialize()
+        +void OnFrameworkInitializationCompleted()
+    }
+    class MainWindowViewModel {
+        <<external>>
+    }
+    class MainWindow {
+        -MainWindowViewModel _viewModel
+        -FloatingLyricsWindow _floatingLyricsWindow
+        -TrayIcon _trayIcon
+        -GlobalHotkeyService _globalHotkeys
+        -bool _spaceHeld
+    }
+    class FloatingLyricsWindow
+    class ImmersiveLyricsView {
+        +void ExitWithAnimation()
+    }
+
+    class WaveProgressBar {
+        +double Value
+        +double Maximum
+        +double Phase
+        +bool IsPlaying
+        +IBrush AccentBrush
+        +double WaveHeight
+        +bool ShowThumb
+        +bool IsWavy
+        +double LoopStart
+        +double LoopEnd
+        +bool IsSeekBar
+        +event SeekStarted
+        +event SeekCompleted
+    }
+    class FluidBackdrop {
+        +IBrush BaseBrush
+        +IBrush AccentBrush
+        +IBrush SecondaryBrush
+        +double Phase
+        +double GlowOpacity
+    }
+    class TransportGlyph {
+        +bool IsPlaying
+        +IBrush Fill
+    }
+    class MediaGlyph {
+        +MediaGlyphKind Kind
+        +bool IsActive
+    }
+    class OptionGlyph {
+        +OptionGlyphKind Kind
+    }
+    class VolumeGlyph {
+        +double Level
+        +bool IsMuted
+    }
+    class LyricLineTextBlock {
+        +LyricLine Line
+        +IBrush AccentBrush
+        +IBrush FutureBrush
+        +IBrush SungBrush
+        +double Position
+        +bool IsPlaying
+    }
+    class MediaGlyphKind {
+        <<enumeration>>
+        Previous
+        Next
+        Play
+        Shuffle
+        Repeat
+        RepeatOne
+        Queue
+        More
+        Lyrics
+        Plus
+        Minus
+        Close
+        Fullscreen
+    }
+    class OptionGlyphKind {
+        <<enumeration>>
+        Sliders
+        Speed
+        Loop
+        Clock
+    }
+    class FadeSlidePageTransition {
+        +double Offset
+        +double ScaleFrom
+        +double ScaleTo
+    }
+    class Motion {
+        <<static>>
+        +$Easing EaseOut
+        +$Animation Tween(...)
+    }
+
+    Application <|-- App
+    Window <|-- MainWindow
+    Window <|-- FloatingLyricsWindow
+    UserControl <|-- ImmersiveLyricsView
+    Control <|-- WaveProgressBar
+    Control <|-- FluidBackdrop
+    Control <|-- TransportGlyph
+    TemplatedControl <|-- MediaGlyph
+    TemplatedControl <|-- OptionGlyph
+    TemplatedControl <|-- VolumeGlyph
+    TextBlock <|-- LyricLineTextBlock
+    IPageTransition <|.. FadeSlidePageTransition
+
+    Program ..> App
+    App ..> MainWindow : creates
+    MainWindow --> MainWindowViewModel : DataContext
+    MainWindow o-- FloatingLyricsWindow : opens
+    MainWindow o-- TrayIcon
+    ImmersiveLyricsView ..> MainWindowViewModel : binds
+
+    MediaGlyph --> MediaGlyphKind
+    OptionGlyph --> OptionGlyphKind
+
+    LyricLineTextBlock ..> Motion
+    ImmersiveLyricsView ..> Motion
+    FloatingLyricsWindow ..> Motion

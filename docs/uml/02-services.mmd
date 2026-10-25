@@ -1,0 +1,203 @@
+---
+title: "Avance Player · 服务层与组合根"
+config:
+  layout: elk
+---
+classDiagram
+    direction LR
+
+    class PlayerServices {
+        +PlaybackService Playback
+        +IPlayerStateStore StateStore
+        +DebouncedStateSaver StateSaver
+        +LocalFolderScanner Scanner
+        +LibraryRestorer LibraryRestorer
+        +LyricsService Lyrics
+        +SystemMediaService SystemMedia
+        +SystemMediaArtworkCache SystemMediaArtwork
+        +FolderWatchService FolderWatch
+        +$PlayerServices CreateDefault(string statePath)
+        +void Dispose()
+    }
+
+    class PlaybackService {
+        +PlaybackSession CurrentSession
+        +bool IsLoaded
+        +bool SupportsPitchShift
+        +PlaybackSnapshot Snapshot
+        +AudioLoadResult Start(AudioSource, TimeSpan, bool)
+        +void Play()
+        +void Pause()
+        +void Stop()
+        +void Seek(TimeSpan)
+        +void SetVolume(double)
+        +void SetRate(double)
+        +void SetPitch(double, bool)
+        +void SetEqualizer(EqualizerSettings)
+        +event Ended
+        +event Failed
+    }
+    class IAudioBackend {
+        <<interface>>
+        +bool IsAvailable
+        +string AvailabilityError
+        +bool SupportsPitchShift
+        +AudioLoadResult Load(AudioSource, TimeSpan)
+        +void Play()
+        +void Pause()
+        +void Stop()
+        +void Seek(TimeSpan)
+        +void SetVolume(double)
+        +void SetRate(double)
+        +void SetPitch(double, bool)
+        +void SetEqualizer(EqualizerSettings)
+        +PlaybackSnapshot Snapshot
+        +event Ended
+        +event Failed
+    }
+    class SwitchableAudioBackend {
+        -LibVlcAudioBackend _local
+        -SimulatedAudioBackend _simulated
+        -IAudioBackend _active
+        +AudioLoadResult Load(AudioSource, TimeSpan)
+    }
+    class LibVlcAudioBackend {
+        +bool IsAvailable
+        +bool SupportsPitchShift
+    }
+    class SimulatedAudioBackend {
+        -TimeProvider _timeProvider
+    }
+    class LibVlcRuntime {
+        +LibVLC TryGet(out string error)
+        +LibVLC TryGet(string[] options, out string error)
+    }
+    class LibVlcNative {
+        <<static P/Invoke>>
+        +$var_Create()
+        +$var_Set()
+    }
+    class PlaybackDiagnostics {
+        <<static>>
+        +$int Run()
+    }
+
+    class IPlayerStateStore {
+        <<interface>>
+        +string LastError
+        +PlayerState Load()
+        +bool Save(PlayerState)
+    }
+    class JsonPlayerStateStore
+    class DebouncedStateSaver {
+        +void Schedule(PlayerState)
+        +void Flush(PlayerState)
+        +event SaveFailed
+    }
+    class LibraryRestorer {
+        +Task~RestoredLibrary~ RestoreAsync(PlayerState, IReadOnlyList~Music~, LocalFolderScanLabels, CancellationToken)
+    }
+    class RestoredLibrary {
+        <<record>>
+        +IReadOnlyList~Music~ Tracks
+        +IReadOnlyDictionary~string,Music~ ByPath
+        +IReadOnlyList~string~ MissingPaths
+    }
+    class PlayerState {
+        +int Version
+        +PlaybackSettings Playback
+        +LibrarySettings Library
+        +UiSettings Ui
+        +$int CurrentVersion = 4
+    }
+    class PlaybackSettings {
+        +double Volume
+        +double LastNonZeroVolume
+        +bool Shuffle
+        +string RepeatMode
+        +double Speed
+        +bool PitchSync
+        +double PitchSemitones
+        +int EqualizerPresetIndex
+        +string LastTrackPath
+        +double LastPositionSeconds
+    }
+    class LibrarySettings {
+        +List~string~ TrackPaths
+        +List~PlaylistState~ Playlists
+        +List~string~ FolderRoots
+        +Dictionary~string,string~ DismissedPaths
+        +Dictionary~string,string~ LyricPaths
+    }
+    class PlaylistState {
+        +string Name
+        +List~string~ TrackPaths
+        +List~string~ FolderRoots
+    }
+    class UiSettings {
+        +string Language
+        +bool FloatingLyricsVisible
+    }
+
+    class LocalFolderScanner {
+        +Task~LocalFolderScanResult~ ScanAsync(string, LocalFolderScanLabels, CancellationToken)
+    }
+    class LocalFolderScanResult {
+        <<record>>
+        +IReadOnlyList~Music~ Tracks
+        +int AudioFileCount
+        +int SkippedFileCount
+        +IReadOnlyList~string~ Warnings
+    }
+    class LocalFolderScanLabels {
+        <<record>>
+        +string UnknownArtist
+        +string UnknownAlbum
+        +string UnknownGenre
+    }
+    class FolderWatchService {
+        +event Changed
+        +void Watch(string)
+        +void Unwatch(string)
+    }
+    class LyricsService {
+        +IReadOnlyList~string~ SupportedExtensions
+        +Task~LyricsDocument~ LoadAsync(string, TimeSpan, CancellationToken)
+        +Task~LyricsDocument?~ TryLoadSidecarAsync(string, TimeSpan, CancellationToken)
+    }
+
+    %% 组合根：PlayerServices 组装并持有全部服务
+    PlayerServices *-- PlaybackService
+    PlayerServices *-- IPlayerStateStore
+    PlayerServices *-- DebouncedStateSaver
+    PlayerServices *-- LocalFolderScanner
+    PlayerServices *-- LibraryRestorer
+    PlayerServices *-- LyricsService
+    PlayerServices *-- FolderWatchService
+
+    %% 播放：服务组合后端；路由自己持有两个实现（组合而非继承）
+    PlaybackService o-- IAudioBackend : backend
+    SwitchableAudioBackend ..|> IAudioBackend
+    LibVlcAudioBackend ..|> IAudioBackend
+    SimulatedAudioBackend ..|> IAudioBackend
+    SwitchableAudioBackend o-- LibVlcAudioBackend : local
+    SwitchableAudioBackend o-- SimulatedAudioBackend : simulated
+    LibVlcAudioBackend *-- LibVlcRuntime
+    LibVlcAudioBackend ..> LibVlcNative : var_Create / var_Set
+    PlaybackDiagnostics ..> LibVlcRuntime
+
+    %% 持久化：接口隔离，写盘加防抖
+    IPlayerStateStore <|.. JsonPlayerStateStore
+    DebouncedStateSaver --> IPlayerStateStore : store
+    LibraryRestorer --> LocalFolderScanner : rescans saved paths
+    LibraryRestorer --> LyricsService : manual lyrics
+    LibraryRestorer ..> RestoredLibrary : produces
+    PlayerState *-- PlaybackSettings
+    PlayerState *-- LibrarySettings
+    PlayerState *-- UiSettings
+    LibrarySettings *-- PlaylistState
+
+    %% 扫描
+    LocalFolderScanner --> LyricsService : sidecar lyrics
+    LocalFolderScanner ..> LocalFolderScanResult
+    LocalFolderScanResult ..> LocalFolderScanLabels

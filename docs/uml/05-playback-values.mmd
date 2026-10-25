@@ -1,0 +1,74 @@
+---
+title: "Avance Player · 播放值对象与事件"
+config:
+  layout: elk
+---
+classDiagram
+    direction LR
+
+    class AudioSource {
+        <<record>>
+        +string FilePath
+        +TimeSpan Duration
+        +bool IsLocalFile
+    }
+
+    class PlaybackSession {
+        <<record>>
+        +long Id
+        +AudioSource Source
+    }
+
+    class AudioLoadResult {
+        <<record>>
+        +PlaybackSession Session
+        +string Error
+        +bool Success
+        +$AudioLoadResult Ok(PlaybackSession)
+        +$AudioLoadResult Fail(string error)
+    }
+
+    class PlaybackSnapshot {
+        <<record>>
+        +bool IsPlaying
+        +TimeSpan Position
+        +TimeSpan Duration
+        +bool IsAtEnd
+    }
+
+    class EqualizerSettings {
+        <<record>>
+        +IReadOnlyList~double~ BandLevels
+        +$EqualizerSettings Flat
+    }
+
+    class PlaybackEnded {
+        <<record>>
+        +PlaybackSession Session
+        +PlaybackEndReason Reason
+    }
+
+    class PlaybackFailure {
+        <<record>>
+        +PlaybackSession Session
+        +string Message
+    }
+
+    class PlaybackEndReason {
+        <<enumeration>>
+        Completed
+        Stopped
+        Error
+    }
+
+    class PlaybackSessionIds {
+        <<static>>
+        +$long Next()
+    }
+
+    PlaybackSession *-- AudioSource
+    AudioLoadResult --> PlaybackSession : 0..1
+    PlaybackEnded --> PlaybackSession
+    PlaybackFailure --> PlaybackSession
+    PlaybackEnded --> PlaybackEndReason
+    PlaybackSessionIds ..> PlaybackSession : assigns Id

@@ -1,0 +1,134 @@
+---
+title: "Avance Player · 歌词解析子系统（策略模式）"
+config:
+  layout: elk
+---
+classDiagram
+    direction TB
+
+    class LyricsService {
+        +IReadOnlyList~string~ SupportedExtensions
+        +Task~LyricsDocument~ LoadAsync(string, TimeSpan, CancellationToken)
+        +Task~LyricsDocument?~ TryLoadSidecarAsync(string, TimeSpan, CancellationToken)
+    }
+
+    class LyricsParserRegistry {
+        <<static>>
+        -ILyricsParser[] SniffOrder
+        +$bool TryParse(byte[], string, TimeSpan, out LyricsDocument, out string)
+        +$bool TryParse(string, string, TimeSpan, out LyricsDocument, out string)
+        -ILyricsParser SelectByExtension(string)
+    }
+
+    class ILyricsParser {
+        <<interface>>
+        +LyricsFormat Format
+        +bool CanParse(string content)
+        +LyricsDocument Parse(string content, LyricsParseContext context)
+    }
+
+    class LyricsParseContext {
+        +string FileName
+        +TimeSpan TrackDuration
+    }
+
+    class LyricsParseException {
+        <<exception>>
+    }
+    class Exception {
+        <<external>>
+    }
+
+    class LyricsTextDecoder {
+        <<static>>
+        +$string Decode(byte[] bytes)
+    }
+
+    class LyricsNormalizer {
+        <<static>>
+    }
+
+    class LyricsTime {
+        <<static>>
+        +$TimeSpan ParseTimestamp(string)
+        +$TimeSpan ParseSrtTimestamp(string)
+    }
+
+    class TtmlTimeContext {
+        <<record struct>>
+        +double FrameRate
+        +double TickRate
+        +$TtmlTimeContext FromRoot(XElement root)
+    }
+
+    class LyricsDocument {
+        <<external>>
+    }
+
+    class LrcLyricsParser {
+        +LyricsFormat Format
+        +bool CanParse(string)
+        +LyricsDocument Parse(string, LyricsParseContext)
+    }
+    class SrtLyricsParser {
+        +LyricsFormat Format
+        +bool CanParse(string)
+        +LyricsDocument Parse(string, LyricsParseContext)
+    }
+    class AssLyricsParser {
+        +LyricsFormat Format
+        +bool CanParse(string)
+        +LyricsDocument Parse(string, LyricsParseContext)
+    }
+    class TtmlLyricsParser {
+        +LyricsFormat Format
+        +bool CanParse(string)
+        +LyricsDocument Parse(string, LyricsParseContext)
+    }
+    class LysLyricsParser {
+        +LyricsFormat Format
+        +bool CanParse(string)
+        +LyricsDocument Parse(string, LyricsParseContext)
+    }
+    class QrcLyricsParser {
+        +LyricsFormat Format
+        +bool CanParse(string)
+        +LyricsDocument Parse(string, LyricsParseContext)
+    }
+    class KrcLyricsParser {
+        +LyricsFormat Format
+        +bool CanParse(string)
+        +LyricsDocument Parse(string, LyricsParseContext)
+        +LyricsDocument ParseBytes(byte[], LyricsParseContext)
+    }
+    class YrcLyricsParser {
+        +LyricsFormat Format
+        +bool CanParse(string)
+        +LyricsDocument Parse(string, LyricsParseContext)
+    }
+
+    LyricsService --> LyricsParserRegistry : delegates parsing
+    LyricsParserRegistry o-- "8" ILyricsParser : parser instances
+    LyricsParserRegistry ..> LyricsTextDecoder : decode bytes
+
+    ILyricsParser <|.. LrcLyricsParser
+    ILyricsParser <|.. SrtLyricsParser
+    ILyricsParser <|.. AssLyricsParser
+    ILyricsParser <|.. TtmlLyricsParser
+    ILyricsParser <|.. LysLyricsParser
+    ILyricsParser <|.. QrcLyricsParser
+    ILyricsParser <|.. KrcLyricsParser
+    ILyricsParser <|.. YrcLyricsParser
+
+    ILyricsParser ..> LyricsParseContext : uses
+    ILyricsParser ..> LyricsDocument : produces
+    LyricsParseException --|> Exception
+
+    TtmlLyricsParser ..> LyricsTime
+    TtmlLyricsParser ..> TtmlTimeContext
+    LrcLyricsParser ..> LyricsTime
+    SrtLyricsParser ..> LyricsTime
+    AssLyricsParser ..> LyricsNormalizer
+    LysLyricsParser ..> LyricsNormalizer
+    QrcLyricsParser ..> LyricsNormalizer
+    YrcLyricsParser ..> LyricsNormalizer

@@ -35,6 +35,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     private readonly Random _random = new();
     private readonly Stack<Music> _shuffleHistory = new();
     private readonly HashSet<Music> _shufflePlayed = [];
+
+    /// <summary>
+    /// 用户手动从歌单里删掉、但文件还在的路径，值记录删除当时的文件指纹。
+    /// 重扫时指纹对得上就不加回；文件被替换过（大小或写入时间变了）则按新歌处理。
+    /// </summary>
+    private readonly Dictionary<string, string> _dismissedPaths = new(PathComparer);
+
+    /// <summary>正在重扫的根目录，防止同一个目录的多次通知叠着跑。</summary>
+    private readonly HashSet<string> _refreshingRoots = new(PathComparer);
+
     private readonly PlayerServices _services;
     private readonly PlaybackService _playback;
     private readonly DebouncedStateSaver _stateSaver;
@@ -82,6 +92,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     private double? _abLoopEndSeconds;
     private CategoryGroupViewModel? _openedCategoryGroup;
     private int _lastCurrentLyricIndex = int.MinValue;
+    private int _currentLyricIndex = -1;
+    private double _currentLyricIndexPosition = double.NaN;
     private bool _isCompactLayout;
     private string _expandedMoreSection = string.Empty;
 
@@ -98,6 +110,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         _playback.Failed += Playback_Failed;
         _stateSaver.SaveFailed += StateSaver_SaveFailed;
         _services.SystemMedia.CommandReceived += SystemMedia_CommandReceived;
+        _services.FolderWatch.Changed += FolderWatch_Changed;
 
         Text = new LocalizedText();
         Text.PropertyChanged += Text_PropertyChanged;
@@ -135,6 +148,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         });
         RemoveTrackFromPlaylistCommand = new RelayCommand(parameter => {
             if (parameter is Music track && SelectedPlaylist is not null && SelectedPlaylist.Tracks.Remove(track)) {
+                // 手动删掉的别再被文件夹重扫塞回来。记下删除时的文件指纹，
+                // 文件真被换过（重新下载/重新压制）就会再次出现。
+                if (!string.IsNullOrWhiteSpace(track.FilePath)
+                    && FileFingerprint(track.FilePath) is { } fingerprint) {
+                    _dismissedPaths[track.FilePath] = fingerprint;
+                }
                 (CurrentPage as PlaylistDetailPageViewModel)?.NotifyTracksChanged();
                 QueueStateSave();
             }
@@ -592,6 +611,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             OnPropertyChanged(nameof(LyricsBackdropAccent));
             OnPropertyChanged(nameof(LyricsBackdropSecondary));
             _lastCurrentLyricIndex = int.MinValue;
+            // 换歌一定要丢掉上一首的索引缓存，否则新歌的前几十毫秒还会套用旧位置算出来的行。
+            _currentLyricIndex = -1;
+            _currentLyricIndexPosition = double.NaN;
             UpdateCurrentLyric();
             OnPropertyChanged(nameof(CurrentLyricIndex));
             OnPropertyChanged(nameof(CurrentLyric));
@@ -617,60 +639,38 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         SetStatus("StatusScanningFolder", folderName);
 
         try {
-            var labels = new LocalFolderScanLabels(
-                Text["UnknownArtist"],
-                Text["UnknownAlbum"],
-                Text["UnknownGenre"]);
-            var result = await Task.Run(
-                () => _folderScanner.ScanAsync(folderPath, labels, cancellationToken),
-                cancellationToken);
-
-            var comparer = OperatingSystem.IsWindows()
-                ? StringComparer.OrdinalIgnoreCase
-                : StringComparer.Ordinal;
-            var existingPaths = new HashSet<string>(
-                playlist.Tracks.Select(track => track.FilePath).Where(path => !string.IsNullOrWhiteSpace(path)),
-                comparer);
-            var libraryPaths = new HashSet<string>(
-                Tracks.Select(track => track.FilePath).Where(path => !string.IsNullOrWhiteSpace(path)),
-                comparer);
-
-            var added = 0;
-            var skipped = result.SkippedFileCount;
-            foreach (var track in result.Tracks) {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (!string.IsNullOrWhiteSpace(track.FilePath) && libraryPaths.Add(track.FilePath)) {
-                    Tracks.Add(track);
-                }
-
-                if (!existingPaths.Add(track.FilePath)) {
-                    skipped++;
-                    continue;
-                }
-
-                playlist.Tracks.Add(track);
-                added++;
+            var root = NormalizeFolderRoot(folderPath);
+            if (root is null) {
+                SetStatus("StatusFolderError", folderPath);
+                return;
             }
+
+            if (!playlist.FolderRoots.Contains(root, PathComparer)) {
+                playlist.FolderRoots.Add(root);
+            }
+
+            var (added, removed, skipped) = await ScanIntoPlaylistAsync(playlist, root, cancellationToken);
 
             if (CurrentPage is PlaylistDetailPageViewModel detail && ReferenceEquals(detail.Playlist, playlist)) {
                 detail.NotifyTracksChanged();
             }
 
-            if (added > 0 && ReferenceEquals(SelectedPlaylist, playlist)) {
-                PlaybackQueue = playlist.Tracks;
-            }
+            if (ReferenceEquals(SelectedPlaylist, playlist)) PlaybackQueue = playlist.Tracks;
 
             if (!HasCurrentTrack && Tracks.Count > 0) {
                 // 先选中导入的第一首，控制台和传输控件才有目标。
                 // 跟恢复时一个做法，不会自己开始放。
-                CurrentTrack = Tracks[0];
                 ApplyPlaybackPosition(TimeSpan.Zero);
+                CurrentTrack = Tracks[0];
                 ResetShuffleState();
             }
 
-            OnPropertyChanged(nameof(QueueCountLabel));
+            ReconcileCurrentTrack();
 
-            if (added == 0) {
+            OnPropertyChanged(nameof(QueueCountLabel));
+            SyncFolderWatch();
+
+            if (added == 0 && removed == 0) {
                 SetStatus("StatusFolderEmpty", folderName);
             }
             else {
@@ -684,6 +684,316 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         }
         catch (Exception exception) {
             SetStatus("StatusFolderError", exception.Message);
+        }
+    }
+
+    /// <summary>
+    /// 扫一遍根目录，再把结果同步进这个歌单。多个歌单共用一个根目录时，
+    /// 用 <see cref="ScanRootAsync"/> 扫一次、再各自调用 <see cref="ApplyScanToPlaylist"/>。
+    /// </summary>
+    private async Task<(int Added, int Removed, int Skipped)> ScanIntoPlaylistAsync(
+        Playlist playlist,
+        string root,
+        CancellationToken cancellationToken) {
+        var result = await ScanRootAsync(root, cancellationToken);
+        return ApplyScanToPlaylist(playlist, root, result);
+    }
+
+    private Task<LocalFolderScanResult> ScanRootAsync(string root, CancellationToken cancellationToken) {
+        var labels = new LocalFolderScanLabels(
+            Text["UnknownArtist"],
+            Text["UnknownAlbum"],
+            Text["UnknownGenre"]);
+        return Task.Run(() => _folderScanner.ScanAsync(root, labels, cancellationToken), cancellationToken);
+    }
+
+    /// <summary>
+    /// 把一次扫描结果同步进歌单：新文件加进来，磁盘上没了的移除。
+    /// 只动这个根目录带来的条目，用户手加的歌和手删的记录都不受影响。
+    /// </summary>
+    private (int Added, int Removed, int Skipped) ApplyScanToPlaylist(
+        Playlist playlist,
+        string root,
+        LocalFolderScanResult result) {
+        var comparer = PathComparer;
+
+        // 磁盘上已经没了的：从歌单和曲库移除。留着只会变成点了报错的死条目。
+        var removed = RemoveMissingUnderRoot(playlist, root, comparer);
+
+        var libraryPaths = new HashSet<string>(
+            Tracks.Select(track => track.FilePath).Where(path => !string.IsNullOrWhiteSpace(path)),
+            comparer);
+        var playlistPaths = new HashSet<string>(
+            playlist.Tracks.Select(track => track.FilePath).Where(path => !string.IsNullOrWhiteSpace(path)),
+            comparer);
+
+        var added = 0;
+        var skipped = result.SkippedFileCount;
+        foreach (var track in result.Tracks) {
+            var path = track.FilePath;
+            if (string.IsNullOrWhiteSpace(path)) continue;
+
+            // 手删过的不加回；文件真被换过就当作新歌重新放进来。
+            // 这个判断必须放在最前面：歌通常还在曲库里，走"首次入库"分支就绕过去了。
+            if (IsDismissed(path)) {
+                skipped++;
+                continue;
+            }
+
+            if (!libraryPaths.Add(path)) {
+                // 曲库里已经有了（可能来自别的文件夹），只把它补进这个歌单。
+                if (!playlistPaths.Add(path)) {
+                    skipped++;
+                    continue;
+                }
+
+                var known = Tracks.FirstOrDefault(item => comparer.Equals(item.FilePath, path));
+                if (known is null) {
+                    skipped++;
+                    continue;
+                }
+
+                playlist.Tracks.Add(known);
+                added++;
+                continue;
+            }
+
+            Tracks.Add(track);
+            if (playlistPaths.Add(path)) {
+                playlist.Tracks.Add(track);
+                added++;
+            }
+            else {
+                skipped++;
+            }
+        }
+
+        return (added, removed, skipped);
+    }
+
+    /// <summary>
+    /// 删掉歌单里那些"属于这个根目录、但磁盘上已经没了"的条目。
+    ///
+    /// 只按 <see cref="File.Exists"/> 判断，不看这次扫描结果：扫不到的也可能是这一轮读标签失败，
+    /// 那种文件还在磁盘上，不该被当成删除。
+    /// </summary>
+    private int RemoveMissingUnderRoot(Playlist playlist, string root, StringComparer comparer) {
+        var removed = 0;
+        for (var index = playlist.Tracks.Count - 1; index >= 0; index--) {
+            var track = playlist.Tracks[index];
+            var path = track.FilePath;
+            if (string.IsNullOrWhiteSpace(path)) continue;
+            if (!IsUnderRoot(path, root)) continue;
+            if (File.Exists(path)) continue;
+
+            playlist.Tracks.RemoveAt(index);
+            _dismissedPaths.Remove(path);
+            RemoveFromLibraryIfUnused(path, comparer);
+            removed++;
+        }
+
+        return removed;
+    }
+
+    /// <summary>
+    /// 曲库里没有任何歌单还引用、而且不是当前播放的歌，就从曲库移除。
+    /// 这样删掉的文件不会在"音乐库"里留一堆灰条。
+    /// </summary>
+    private void RemoveFromLibraryIfUnused(string path, StringComparer comparer) {
+        var stillUsed = Playlists.Any(playlist =>
+            playlist.Tracks.Any(track => comparer.Equals(track.FilePath, path)));
+        if (stillUsed) return;
+
+        // 正在放的那首也照删：文件已经没了，列表里留着只会点一下报错。
+        // 播放本身不受影响，libvlc 还握着已经打开的句柄，切歌时自然就离开了。
+        for (var index = Tracks.Count - 1; index >= 0; index--) {
+            if (!comparer.Equals(Tracks[index].FilePath, path)) continue;
+            ForgetShuffleState(Tracks[index]);
+            Tracks.RemoveAt(index);
+        }
+    }
+
+    /// <summary>把已经不在磁盘上的歌从随机播放的历史里摘掉，免得"上一首"跳回死条目。</summary>
+    private void ForgetShuffleState(Music track) {
+        _shufflePlayed.Remove(track);
+        if (!_shuffleHistory.Contains(track)) return;
+
+        // Stack 只能从顶上弹，要删中间的一项就得按原顺序重建一遍。
+        // 枚举是栈顶优先，反转后就是从底往上，按这个顺序压回去顺序不变。
+        var kept = _shuffleHistory.Reverse().Where(item => !ReferenceEquals(item, track)).ToList();
+        _shuffleHistory.Clear();
+        foreach (var item in kept) _shuffleHistory.Push(item);
+    }
+
+    /// <summary>
+    /// 当前曲目被删掉之后收个尾：正在放就让它自然播完，没在放就换个目标，
+    /// 否则控制台会停在一个已经不存在的条目上。
+    /// </summary>
+    private void ReconcileCurrentTrack() {
+        if (ReferenceEquals(CurrentTrack, _emptyTrack)) return;
+        if (IsPlaying) return;
+
+        var path = CurrentTrack.FilePath;
+        if (!string.IsNullOrWhiteSpace(path) && File.Exists(path)) return;
+
+        var replacement = PlaybackQueue.FirstOrDefault() ?? Tracks.FirstOrDefault();
+        ApplyPlaybackPosition(TimeSpan.Zero);
+        CurrentTrack = replacement ?? _emptyTrack;
+        AbLoopReset();
+    }
+
+    private static bool IsUnderRoot(string path, string root) {
+        try {
+            var fullPath = Path.GetFullPath(path);
+            var fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+            var comparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            return fullPath.StartsWith(fullRoot + Path.DirectorySeparatorChar, comparison)
+                   || fullPath.StartsWith(fullRoot + Path.AltDirectorySeparatorChar, comparison);
+        }
+        catch (Exception) {
+            return false;
+        }
+    }
+
+    private static string? NormalizeFolderRoot(string folderPath) {
+        if (string.IsNullOrWhiteSpace(folderPath)) return null;
+        try {
+            if (!Path.IsPathFullyQualified(folderPath)) return null;
+            return Path.TrimEndingDirectorySeparator(Path.GetFullPath(folderPath));
+        }
+        catch (Exception) {
+            return null;
+        }
+    }
+
+    /// <summary>路径比较方式跟持久化那层保持一致：Windows 不区分大小写。</summary>
+    private static StringComparer PathComparer => OperatingSystem.IsWindows()
+        ? System.StringComparer.OrdinalIgnoreCase
+        : System.StringComparer.Ordinal;
+
+    private bool IsDismissed(string path) {
+        if (!_dismissedPaths.TryGetValue(path, out var remembered)) return false;
+
+        var current = FileFingerprint(path);
+        if (current is null) {
+            // 文件暂时读不到（网络盘掉线之类）：保守起见还是不加回。
+            return true;
+        }
+
+        // 老记录没有指纹：补上当前值，别让下一次重扫就把它当成换过的文件。
+        if (string.IsNullOrEmpty(remembered)) {
+            _dismissedPaths[path] = current;
+            return true;
+        }
+
+        if (string.Equals(current, remembered, StringComparison.Ordinal)) return true;
+
+        // 文件确实被换过了，手删记录失效，允许它重新出现。
+        _dismissedPaths.Remove(path);
+        return false;
+    }
+
+    /// <summary>
+    /// 文件指纹：大小 + 最后写入时间。只用来判断"还是不是原来那首歌"，
+    /// 不读内容所以很便宜；读不到就返回 null。
+    /// </summary>
+    private static string? FileFingerprint(string path) {
+        try {
+            var info = new FileInfo(path);
+            if (!info.Exists) return null;
+            return $"{info.Length}:{info.LastWriteTimeUtc.Ticks}";
+        }
+        catch (Exception) {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 让监听服务盯住所有歌单的文件夹根目录。导入、删除歌单、恢复之后都要调一次。
+    /// </summary>
+    private void SyncFolderWatch() {
+        if (_isRestoringState || _disposed) return;
+        _services.FolderWatch.Sync(AllFolderRoots());
+    }
+
+    private IEnumerable<string> AllFolderRoots() {
+        var seen = new HashSet<string>(PathComparer);
+        foreach (var playlist in Playlists) {
+            foreach (var root in playlist.FolderRoots) {
+                if (!string.IsNullOrWhiteSpace(root) && seen.Add(root)) yield return root;
+            }
+        }
+    }
+
+    /// <summary>文件夹有了变化：重扫那个根目录，多个歌单共用同一个根目录时各扫各的。</summary>
+    private void FolderWatch_Changed(string rootFolder) {
+        if (_disposed) return;
+        Dispatcher.UIThread.Post(async () => await RefreshFolderAsync(rootFolder));
+    }
+
+    /// <summary>
+    /// 重扫一个根目录并同步到所有引用它的歌单。后台线程不会碰 ObservableCollection，
+    /// 扫描完再回 UI 线程改列表。
+    /// </summary>
+    public async Task RefreshFolderAsync(string rootFolder, CancellationToken cancellationToken = default) {
+        if (_disposed) return;
+        var root = NormalizeFolderRoot(rootFolder);
+        if (root is null) return;
+
+        var targets = Playlists
+            .Where(playlist => playlist.FolderRoots.Contains(root, PathComparer))
+            .ToList();
+        if (targets.Count == 0) return;
+
+        // 同一个根目录正在扫就别叠加，等这一轮结束。
+        if (!_refreshingRoots.Add(root)) return;
+        try {
+            // 一个根目录只扫一次；多个歌单共用它时把同一份结果各套一遍。
+            var result = await ScanRootAsync(root, cancellationToken);
+
+            var added = 0;
+            var removed = 0;
+            var skipped = 0;
+            foreach (var playlist in targets) {
+                cancellationToken.ThrowIfCancellationRequested();
+                var (playlistAdded, playlistRemoved, playlistSkipped) =
+                    ApplyScanToPlaylist(playlist, root, result);
+                added += playlistAdded;
+                removed += playlistRemoved;
+                skipped += playlistSkipped;
+            }
+
+            if (added == 0 && removed == 0) return;
+
+            if (CurrentPage is PlaylistDetailPageViewModel detail && targets.Contains(detail.Playlist)) {
+                detail.NotifyTracksChanged();
+            }
+
+            var selectedAffected = SelectedPlaylist is { } selected && targets.Contains(selected);
+            if (selectedAffected) PlaybackQueue = SelectedPlaylist!.Tracks;
+
+            if (!HasCurrentTrack && Tracks.Count > 0) {
+                ApplyPlaybackPosition(TimeSpan.Zero);
+                CurrentTrack = Tracks[0];
+                ResetShuffleState();
+            }
+
+            ReconcileCurrentTrack();
+
+            OnPropertyChanged(nameof(QueueCountLabel));
+            SetStatus("StatusFolderRefreshed", added, GetFolderDisplayName(root), removed);
+            QueueStateSave();
+        }
+        catch (OperationCanceledException) {
+            // 退出时取消，不用报。
+        }
+        catch (Exception exception) {
+            SetStatus("StatusFolderError", exception.Message);
+        }
+        finally {
+            _refreshingRoots.Remove(root);
         }
     }
 
@@ -724,6 +1034,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         CurrentTrack.HasManualLyrics = manual;
 
         _lastCurrentLyricIndex = int.MinValue;
+        _currentLyricIndex = -1;
+        _currentLyricIndexPosition = double.NaN;
         UpdateCurrentLyric();
         OnPropertyChanged(nameof(NoLyricsAvailable));
         OnPropertyChanged(nameof(CurrentLyric));
@@ -945,6 +1257,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     private void Navigate(string destination) {
         _openedCategoryGroup = null;
         SelectedNavigation = destination;
+        //分类逻辑
         CurrentPage = destination switch {
             "artists" => CreateCategoryPage(Text["ArtistsTitle"], Text["ArtistsSubtitle"], track => track.Artist),
             "albums" => CreateCategoryPage(Text["AlbumsTitle"], Text["AlbumsSubtitle"], track => track.Album),
@@ -955,7 +1268,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         };
     }
 
-    private CategoryBrowsePageViewModel CreateCategoryPage(string title, string subtitle, Func<Music, string> selector) {
+    /// <summary>
+    /// 按某个字段把曲库分组，拼出一个分类浏览页。
+    /// </summary>
+    /// <param name="title">页面标题。</param>
+    /// <param name="subtitle">页面副标题。</param>
+    /// <param name="selector">从歌曲里取分类键，比如歌手名或专辑名。</param>
+    private CategoryBrowsePageViewModel CreateCategoryPage(
+        string title,
+        string subtitle,
+        Func<Music, string> selector) {
         var groups = Tracks
             .GroupBy(selector)
             .Select(group => new CategoryGroupViewModel(
@@ -964,7 +1286,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
                 group.First().ArtworkColor,
                 group.ToArray()))
             .ToList();
-        return new CategoryBrowsePageViewModel(title, subtitle, new ObservableCollection<CategoryGroupViewModel>(groups));
+        return new CategoryBrowsePageViewModel(title, subtitle,
+            new ObservableCollection<CategoryGroupViewModel>(groups));
     }
 
     private void Text_PropertyChanged(object? sender, PropertyChangedEventArgs e) {
@@ -1015,11 +1338,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
 
     private void PlayTrack(Music track, ObservableCollection<Music>? queue = null) {
         if (queue is not null) PlaybackQueue = queue;
+        // 先把位置归零再换歌：CurrentTrack 的 setter 会按当前时钟重算歌词行，
+        // 拿上一首的位置去算新歌的话，切歌瞬间会先跳到某一行的中间。
+        ApplyPlaybackPosition(TimeSpan.Zero);
         CurrentTrack = track;
         _pendingSeekTargetSeconds = null;
         _isSeeking = false;
         AbLoopReset();
-        ApplyPlaybackPosition(TimeSpan.Zero);
         if (!StartTrack(track, TimeSpan.Zero, autoplay: true)) return;
 
         RecentTracks.Remove(track);
@@ -1111,9 +1436,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
 
         if (direction < 0 && IsShuffleMode && _shuffleHistory.Count > 0) {
             var previous = _shuffleHistory.Pop();
+            ApplyPlaybackPosition(TimeSpan.Zero);
             CurrentTrack = previous;
             AbLoopReset();
-            ApplyPlaybackPosition(TimeSpan.Zero);
             StartTrack(previous, TimeSpan.Zero, autoplay: true);
             return;
         }
@@ -1180,9 +1505,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         var next = unplayed[_random.Next(unplayed.Count)];
         _shufflePlayed.Add(CurrentTrack);
         _shuffleHistory.Push(CurrentTrack);
+        ApplyPlaybackPosition(TimeSpan.Zero);
         CurrentTrack = next;
         AbLoopReset();
-        ApplyPlaybackPosition(TimeSpan.Zero);
         StartTrack(next, TimeSpan.Zero, autoplay: true);
     }
 
@@ -1362,6 +1687,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         SelectedPlaylist = null;
         Navigate("playlists");
         SetStatus("StatusDeleted", deletedName);
+        SyncFolderWatch();
         QueueStateSave();
     }
 
@@ -1407,6 +1733,35 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         }
         finally {
             _isRestoringState = false;
+        }
+
+        // 恢复期间不进监听：那会儿歌单还在重建，会白扫一遍。
+        SyncFolderWatch();
+
+        // 对一次账：应用没开着时往文件夹里加/删的歌，靠这次补扫才能跟上。
+        // 不阻塞初始化：扫大目录可能要好一会儿，界面先出来更重要。
+        _ = RefreshAllFoldersAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// 把所有已导入的文件夹重扫一遍。启动时做一次，保证关机期间的变动不漏。
+    /// 单个目录失败不影响其他目录，所以这里逐个吞掉异常。
+    /// </summary>
+    public async Task RefreshAllFoldersAsync(CancellationToken cancellationToken = default) {
+        if (_disposed) return;
+
+        var roots = AllFolderRoots().ToList();
+        foreach (var root in roots) {
+            if (_disposed || cancellationToken.IsCancellationRequested) return;
+            try {
+                await RefreshFolderAsync(root, cancellationToken);
+            }
+            catch (OperationCanceledException) {
+                return;
+            }
+            catch (Exception) {
+                // 单个目录挂了（网络盘、权限）不该让其余目录也跳过。
+            }
         }
     }
 
@@ -1462,6 +1817,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         }
         OnPropertyChanged(nameof(QueueCountLabel));
 
+        // 手删记录要在加歌之前恢复，重扫时才能照着跳过。
+        _dismissedPaths.Clear();
+        foreach (var (path, fingerprint) in state.Library.DismissedPaths ?? []) {
+            if (string.IsNullOrWhiteSpace(path)) continue;
+            _dismissedPaths[path] = fingerprint ?? string.Empty;
+        }
+
         SelectedPlaylist = null;
         Playlists.Clear();
         foreach (var playlistState in state.Library.Playlists ?? []) {
@@ -1477,6 +1839,21 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
                     playlist.Tracks.Add(track);
                 }
             }
+
+            // 老状态文件没有 FolderRoots；这时按歌单里的路径反推一次，
+            // 让已经有歌单的用户也能直接享受到自动刷新。
+            var roots = playlistState.FolderRoots ?? [];
+            foreach (var root in roots) {
+                if (string.IsNullOrWhiteSpace(root)) continue;
+                var normalized = NormalizeFolderRoot(root);
+                if (normalized is null || playlist.FolderRoots.Contains(normalized, PathComparer)) continue;
+                playlist.FolderRoots.Add(normalized);
+            }
+
+            if (playlist.FolderRoots.Count == 0) {
+                InferFolderRoots(playlist, comparer);
+            }
+
             Playlists.Add(playlist);
         }
 
@@ -1484,20 +1861,86 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
 
         if (!string.IsNullOrWhiteSpace(state.Playback.LastTrackPath)
             && restored.ByPath.TryGetValue(state.Playback.LastTrackPath, out var lastTrack)) {
-            CurrentTrack = lastTrack;
+            // 先把时钟归零再换歌：setter 里重算歌词行时不会拿上一首的位置去套新歌。
+            // 位置随后再补上，这时才按新歌自己的时长做钳制。
             var position = Math.Clamp(state.Playback.LastPositionSeconds, 0, lastTrack.Duration.TotalSeconds);
+            ApplyPlaybackPosition(TimeSpan.Zero);
+            CurrentTrack = lastTrack;
             ApplyPlaybackPosition(TimeSpan.FromSeconds(position));
         }
         else if (Tracks.Count > 0) {
             // 曲库还在，但上次那首没了（比如老的 demo 路径）。选中恢复出来的第一首，
             // 但不自动播放，控制台和传输控件还有个目标。
-            CurrentTrack = Tracks[0];
             ApplyPlaybackPosition(TimeSpan.Zero);
+            CurrentTrack = Tracks[0];
         }
 
         ResetShuffleState();
         SetStatus(restored.MissingPaths.Count > 0 ? "StatusRestoreMissing" : "StatusIdle",
             restored.MissingPaths.Count);
+    }
+
+    /// <summary>
+    /// 老状态文件没存歌单的文件夹来源。按歌单里所有歌的共同祖目录反推一个根：
+    /// 宁可推得保守（只取共同部分），也不要盯着一个过大的目录把别的东西扫进来。
+    /// </summary>
+    private static void InferFolderRoots(Playlist playlist, StringComparer comparer) {
+        var directories = new List<string>();
+        foreach (var track in playlist.Tracks) {
+            if (string.IsNullOrWhiteSpace(track.FilePath)) continue;
+            try {
+                if (!Path.IsPathFullyQualified(track.FilePath)) continue;
+                var directory = Path.GetDirectoryName(Path.GetFullPath(track.FilePath));
+                if (!string.IsNullOrWhiteSpace(directory)) directories.Add(directory);
+            }
+            catch (Exception) {
+                // 坏路径跳过。
+            }
+        }
+
+        if (directories.Count == 0) return;
+
+        // 所有歌都在同一个子目录里，那个目录就是来源；
+        // 分散在多个子目录时退回它们的共同祖先。
+        var common = directories[0];
+        foreach (var directory in directories.Skip(1)) {
+            common = CommonAncestor(common, directory);
+            if (string.IsNullOrEmpty(common)) return;
+        }
+
+        if (string.IsNullOrEmpty(common) || !Directory.Exists(common)) return;
+        if (!playlist.FolderRoots.Contains(common, comparer)) playlist.FolderRoots.Add(common);
+    }
+
+    private static string CommonAncestor(string left, string right) {
+        try {
+            var leftPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(left));
+            var rightPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(right));
+            var comparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            if (string.Equals(leftPath, rightPath, comparison)) return leftPath;
+
+            var leftParts = leftPath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var rightParts = rightPath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var shared = new List<string>();
+            for (var index = 0; index < leftParts.Length && index < rightParts.Length; index++) {
+                if (!string.Equals(leftParts[index], rightParts[index], comparison)) break;
+                shared.Add(leftParts[index]);
+            }
+
+            if (shared.Count == 0) return string.Empty;
+            var joined = string.Join(Path.DirectorySeparatorChar, shared);
+            // 拆出来第一段是根的空串（Unix），补回去。
+            if (leftPath.StartsWith(Path.DirectorySeparatorChar) && !joined.StartsWith(Path.DirectorySeparatorChar)) {
+                joined = Path.DirectorySeparatorChar + joined;
+            }
+
+            return joined.Length == 0 ? string.Empty : joined;
+        }
+        catch (Exception) {
+            return string.Empty;
+        }
     }
 
     private static RepeatMode ParseRepeatMode(string? value) {
@@ -1522,6 +1965,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
                 Name = playlist.Name,
                 TrackPaths = playlist.Tracks
                     .Select(track => track.FilePath)
+                    .Where(path => !string.IsNullOrWhiteSpace(path))
+                    .Distinct(comparer)
+                    .ToList(),
+                FolderRoots = playlist.FolderRoots
                     .Where(path => !string.IsNullOrWhiteSpace(path))
                     .Distinct(comparer)
                     .ToList()
@@ -1567,6 +2014,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
             Library = new LibrarySettings {
                 TrackPaths = trackPaths,
                 Playlists = playlists,
+                FolderRoots = playlists
+                    .SelectMany(playlist => playlist.FolderRoots)
+                    .Where(path => !string.IsNullOrWhiteSpace(path))
+                    .Distinct(comparer)
+                    .ToList(),
+                DismissedPaths = new Dictionary<string, string>(_dismissedPaths, comparer),
                 LyricPaths = lyricPaths
             },
             Ui = new UiSettings {
@@ -1788,8 +2241,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
     }
 
     private void UpdateCurrentLyric() {
-        var activeLine = CurrentLyricIndex;
         var position = CurrentPositionSeconds;
+        // 每 100ms 的时钟都会走到这里。索引只在换行或位置跳回去时才需要重算，
+        // 其余时候沿用缓存，省掉一遍全表扫描。
+        if (double.IsNaN(_currentLyricIndexPosition) || position < _currentLyricIndexPosition) {
+            _currentLyricIndex = FindCurrentLyricIndex(position);
+        }
+        else if (_currentLyricIndex < CurrentTrack.Lyrics.Count - 1) {
+            var next = CurrentTrack.Lyrics[_currentLyricIndex + 1];
+            if (next.Timestamp.TotalSeconds <= position) _currentLyricIndex = FindCurrentLyricIndex(position);
+        }
+
+        _currentLyricIndexPosition = position;
+        var activeLine = _currentLyricIndex;
         for (var index = 0; index < CurrentTrack.Lyrics.Count; index++) {
             var line = CurrentTrack.Lyrics[index];
             line.IsCurrent = index == activeLine;
@@ -1806,6 +2270,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         }
     }
 
+    /// <summary>位置对应的歌词下标；还没唱到第一行时是 -1。</summary>
+    private int FindCurrentLyricIndex(double positionSeconds) {
+        var lyrics = CurrentTrack.Lyrics;
+        for (var index = lyrics.Count - 1; index >= 0; index--) {
+            if (lyrics[index].Timestamp.TotalSeconds <= positionSeconds) return index;
+        }
+
+        return -1;
+    }
+
     private static int FindCurrentWord(LyricLine line, double positionSeconds) {
         if (!line.HasWordTiming) return -1;
 
@@ -1819,10 +2293,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
 
     public int CurrentLyricIndex {
         get {
-            for (var index = CurrentTrack.Lyrics.Count - 1; index >= 0; index--) {
-                if (CurrentTrack.Lyrics[index].Timestamp.TotalSeconds <= CurrentPositionSeconds) return index;
+            // 歌词可能在当前歌上被换掉（手动选文件、sidecar 重新挂载）。
+            // 缓存值如果越界就当场按当前时钟重算，别让绑定读到 OutOfRange。
+            if (_currentLyricIndex >= CurrentTrack.Lyrics.Count) {
+                _currentLyricIndex = FindCurrentLyricIndex(CurrentPositionSeconds);
+                _currentLyricIndexPosition = CurrentPositionSeconds;
             }
-            return -1;
+
+            return _currentLyricIndex;
         }
     }
 
@@ -1861,6 +2339,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IDisposable {
         _playback.Failed -= Playback_Failed;
         _stateSaver.SaveFailed -= StateSaver_SaveFailed;
         _services.SystemMedia.CommandReceived -= SystemMedia_CommandReceived;
+        _services.FolderWatch.Changed -= FolderWatch_Changed;
         Text.PropertyChanged -= Text_PropertyChanged;
         _services.SystemMedia.Clear();
         _services.Dispose();
