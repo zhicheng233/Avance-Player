@@ -18,6 +18,18 @@ public partial class FloatingLyricsWindow : Window {
         InitializeComponent();
     }
 
+    /// <summary>
+    /// 窗口高度跟着内容走（有歌词行时更高，没有时更矮）。
+    /// 高度变了要通知宿主重新贴底，否则会向下长出去、压出屏幕。
+    /// </summary>
+    public event EventHandler? ContentSizeChanged;
+
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change) {
+        base.OnPropertyChanged(change);
+        if (change.Property == BoundsProperty && change.GetOldValue<Rect>().Height != change.GetNewValue<Rect>().Height)
+            ContentSizeChanged?.Invoke(this, EventArgs.Empty);
+    }
+
     protected override void OnOpened(EventArgs e) {
         base.OnOpened(e);
         PlayEntrance();

@@ -5,8 +5,9 @@
         xmlns:controls="using:Avance_Player.Controls"
         x:Class="Avance_Player.Views.FloatingLyricsWindow"
         x:DataType="vm:MainWindowViewModel"
-        Width="430" Height="168"
-        MinWidth="320" MinHeight="132"
+        Width="430"
+        SizeToContent="Height"
+        MinWidth="320"
         CanResize="False"
         ShowInTaskbar="False"
         Topmost="True"
@@ -71,7 +72,9 @@
                 </StackPanel>
             </Grid>
 
-            <TransitioningContentControl Grid.Row="1" Content="{Binding CurrentLyric}" Margin="4,12,4,8">
+            <TransitioningContentControl Grid.Row="1" Content="{Binding CurrentLyric}" Margin="4,12,4,8" MinHeight="42"
+                                         VerticalContentAlignment="Center"
+                                         IsVisible="{Binding CurrentLyric, Converter={x:Static ObjectConverters.IsNotNull}}">
                 <TransitioningContentControl.PageTransition>
                     <controls:FadeSlidePageTransition Duration="0:0:0.26" Offset="8" ScaleFrom="1" ScaleTo="1" />
                 </TransitioningContentControl.PageTransition>
