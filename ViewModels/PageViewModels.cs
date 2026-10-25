@@ -14,6 +14,7 @@ public abstract class PageViewModel(string title, string subtitle) {
 public sealed class LibraryPageViewModel(ObservableCollection<Music> tracks)
     : PageViewModel("Your library", "Everything you love, in one place.") {
     public ObservableCollection<Music> Tracks { get; } = tracks;
+    public SongSearchViewModel Search { get; } = new(tracks);
 }
 
 public sealed class CategoryBrowsePageViewModel(string title, string subtitle, ObservableCollection<CategoryGroupViewModel> groups)
@@ -33,6 +34,9 @@ public sealed class TrackCollectionPageViewModel(string title, string subtitle, 
     : PageViewModel(title, subtitle) {
     public IReadOnlyList<Music> Tracks { get; } = tracks;
     public bool IsEmpty => Tracks.Count == 0;
+
+    // 合集页的列表是快照，过滤后单独维护一份可观察副本供搜索使用。
+    public SongSearchViewModel Search { get; } = new(new ObservableCollection<Music>(tracks));
 }
 
 public sealed class PlaylistsPageViewModel(ObservableCollection<Playlist> playlists)
@@ -46,6 +50,10 @@ public sealed class PlaylistDetailPageViewModel(Playlist playlist, ObservableCol
     public Playlist Playlist { get; } = playlist;
     public ObservableCollection<Music> Library { get; } = library;
     public bool IsEmpty => Playlist.Tracks.Count == 0;
+
+    /// <summary>歌单页的两段列表各自可搜：歌单内容和可加入的曲库。</summary>
+    public SongSearchViewModel Search { get; } = new(playlist.Tracks);
+    public SongSearchViewModel LibrarySearch { get; } = new(library);
 
     public event PropertyChangedEventHandler? PropertyChanged;
 

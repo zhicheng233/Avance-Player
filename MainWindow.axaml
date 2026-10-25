@@ -129,10 +129,19 @@
                                 <TextBlock Text="{Binding $parent[Window].DataContext.Text[LibraryRotationTitle]}" FontSize="21" FontWeight="Bold" />
                                 <TextBlock Text="{Binding $parent[Window].DataContext.Text[LibraryRotationSubtitle]}" FontSize="12" Foreground="#938C7E" />
                             </StackPanel>
-                            <TextBlock Grid.Column="1" Text="{Binding $parent[Window].DataContext.Text[AlbumColumnHeader]}" FontSize="10" Foreground="#7C766B" VerticalAlignment="Bottom" Margin="0,0,44,2" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="14" VerticalAlignment="Bottom">
+                                <TextBlock Text="{Binding $parent[Window].DataContext.Text[AlbumColumnHeader]}" FontSize="10" Foreground="#7C766B" VerticalAlignment="Center" Margin="0,0,0,2" />
+                                <TextBox Classes="song-search" Text="{Binding Search.SearchText, Mode=TwoWay}" MinWidth="200" MaxWidth="240"
+                                         PlaceholderText="{Binding $parent[Window].DataContext.Text[SearchPlaceholder]}" />
+                            </StackPanel>
                         </Grid>
-                        <ItemsControl ItemsSource="{Binding Tracks}" ItemTemplate="{StaticResource SongRowTemplate}"
+                        <ItemsControl ItemsSource="{Binding Search.Tracks}" ItemTemplate="{StaticResource SongRowTemplate}"
                                       IsVisible="{Binding Tracks.Count, Converter={StaticResource CountToBoolConverter}}" />
+                        <Border IsVisible="{Binding Search.HasNoResults}"
+                                Background="#1A1F1D19" CornerRadius="18" Padding="24">
+                            <TextBlock Text="{Binding $parent[Window].DataContext.Text[SearchNoResults]}" Foreground="#A8A193"
+                                       FontSize="14" TextWrapping="Wrap" />
+                        </Border>
                         <Border IsVisible="{Binding Tracks.Count, Converter={StaticResource CountToEmptyConverter}}"
                                 Background="#1A1F1D19" CornerRadius="18" Padding="24">
                             <TextBlock Text="{Binding $parent[Window].DataContext.Text[EmptyLibrary]}" Foreground="#A8A193"
@@ -151,7 +160,11 @@
                         <TextBlock Text="{Binding Title}" FontSize="36" FontWeight="Bold" />
                         <TextBlock Text="{Binding Subtitle}" Foreground="#A8A193" FontSize="15" />
                     </StackPanel>
-                    <ItemsControl ItemsSource="{Binding Tracks}" ItemTemplate="{StaticResource SongRowTemplate}" />
+                    <TextBox Classes="song-search" Text="{Binding Search.SearchText, Mode=TwoWay}"
+                             PlaceholderText="{Binding $parent[Window].DataContext.Text[SearchPlaceholder]}"
+                             IsVisible="{Binding !IsEmpty}" HorizontalAlignment="Left" />
+                    <ItemsControl ItemsSource="{Binding Search.Tracks}" ItemTemplate="{StaticResource SongRowTemplate}" />
+                    <TextBlock Text="{Binding $parent[Window].DataContext.Text[SearchNoResults]}" Foreground="#8E8779" IsVisible="{Binding Search.HasNoResults}" />
                     <TextBlock Text="{Binding $parent[Window].DataContext.Text[EmptyCollection]}" Foreground="#8E8779" IsVisible="{Binding IsEmpty}" />
                 </StackPanel>
             </ScrollViewer>
@@ -269,14 +282,24 @@
                     </Grid>
 
                     <StackPanel Spacing="12">
-                        <TextBlock Text="{Binding $parent[Window].DataContext.Text[InPlaylist]}" FontSize="20" FontWeight="Bold" />
-                        <ItemsControl ItemsSource="{Binding Playlist.Tracks}" ItemTemplate="{StaticResource PlaylistTrackTemplate}" />
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Text="{Binding $parent[Window].DataContext.Text[InPlaylist]}" FontSize="20" FontWeight="Bold" VerticalAlignment="Center" />
+                            <TextBox Grid.Column="1" Classes="song-search" Text="{Binding Search.SearchText, Mode=TwoWay}"
+                                     PlaceholderText="{Binding $parent[Window].DataContext.Text[SearchPlaceholder]}" />
+                        </Grid>
+                        <ItemsControl ItemsSource="{Binding Search.Tracks}" ItemTemplate="{StaticResource PlaylistTrackTemplate}" />
+                        <TextBlock Text="{Binding $parent[Window].DataContext.Text[SearchNoResults]}" Foreground="#8E8779" IsVisible="{Binding Search.HasNoResults}" />
                         <TextBlock Text="{Binding $parent[Window].DataContext.Text[EmptyPlaylist]}" Foreground="#8E8779" IsVisible="{Binding IsEmpty}" />
                     </StackPanel>
 
                     <StackPanel Spacing="12">
-                        <TextBlock Text="{Binding $parent[Window].DataContext.Text[AddSomethingGood]}" FontSize="20" FontWeight="Bold" />
-                        <ItemsControl ItemsSource="{Binding Library}" ItemTemplate="{StaticResource SongRowTemplate}" />
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Text="{Binding $parent[Window].DataContext.Text[AddSomethingGood]}" FontSize="20" FontWeight="Bold" VerticalAlignment="Center" />
+                            <TextBox Grid.Column="1" Classes="song-search" Text="{Binding LibrarySearch.SearchText, Mode=TwoWay}"
+                                     PlaceholderText="{Binding $parent[Window].DataContext.Text[SearchPlaceholder]}" />
+                        </Grid>
+                        <ItemsControl ItemsSource="{Binding LibrarySearch.Tracks}" ItemTemplate="{StaticResource SongRowTemplate}" />
+                        <TextBlock Text="{Binding $parent[Window].DataContext.Text[SearchNoResults]}" Foreground="#8E8779" IsVisible="{Binding LibrarySearch.HasNoResults}" />
                     </StackPanel>
                 </StackPanel>
             </ScrollViewer>
@@ -368,6 +391,27 @@
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="HorizontalContentAlignment" Value="Center" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+        <!-- 歌曲列表顶部的搜索框：沿用 island 的暖色胶囊，别让 Fluent 默认蓝框跑出来。 -->
+        <Style Selector="TextBox.song-search">
+            <Setter Property="Background" Value="#2A2925" />
+            <Setter Property="Foreground" Value="#F1EBE0" />
+            <Setter Property="BorderBrush" Value="#3A3833" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="18" />
+            <Setter Property="Padding" Value="14,8" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="MinWidth" Value="220" />
+            <Setter Property="MaxWidth" Value="320" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+        <Style Selector="TextBox.song-search:pointerover /template/ Border#PART_BorderElement">
+            <Setter Property="Background" Value="#333230" />
+            <Setter Property="BorderBrush" Value="#4A4740" />
+        </Style>
+        <Style Selector="TextBox.song-search:focus /template/ Border#PART_BorderElement">
+            <Setter Property="Background" Value="#333230" />
+            <Setter Property="BorderBrush" Value="#C9BFA8" />
         </Style>
         <Style Selector="Button.island-button:pointerover">
             <Setter Property="Background" Value="#3A3833" />
